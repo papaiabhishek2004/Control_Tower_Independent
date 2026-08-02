@@ -64,9 +64,29 @@ measurements = measure_control_tower_objects(
 - `canonical_display`: recommendation, risk, trust, confidence, evidence count, runtime status, and model cost.
 - `quality`: trust, confidence, grounding, coverage, and hallucination values.
 - `release_assessment`: release route, HITL requirement, governance status, and reasons.
+- `llm_judge_assurance`: LLM Judge committee verdicts for OWASP, evidence, grounding, governance, business risk, and final arbitration.
+- `owasp_ai`: OWASP/security verdict derived from judge and security signals.
+- `policy_as_code`: release gates for trust, confidence, evidence, OWASP, PII, latency, retry, and risk.
 - `canonical_object_audit`: row-level canonical Control Tower objects for dashboards and audit reports.
 - `canonical_consistency_audit`: stale projection checks across runtime objects.
 - `runtime_event_contract`: normalized AEGIS runtime event contract for emitted agent events.
+
+## LLM Judge and OWASP AI Controls
+
+The independent Control Tower includes AEGIS LLM Judge and OWASP AI controls.
+In the Persona Decision Tower sidebar, use `Enable LLM Judge`.
+
+- Disabled: AEGIS runs deterministic judge fallback, OWASP checks, and policy gates.
+- Enabled: AEGIS attempts configured LLM judge execution and falls back to deterministic controls if no provider/key is available.
+
+The LLM Judge committee includes:
+
+- Security / OWASP Judge
+- Evidence Judge
+- Grounding Judge
+- Governance Judge
+- Business Risk Judge
+- Final Arbitration Judge
 
 ## AEGIS-Derived HITL Logic
 

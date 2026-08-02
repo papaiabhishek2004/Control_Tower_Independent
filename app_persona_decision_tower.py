@@ -23,7 +23,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from services1.agentic_app_adapters import JSONL_RUNTIME_LOG_APP_ID, execute_onboarded_agentic_app
+from services1.llm_judge_assurance_service import run_llm_judge_assurance
 from services1.onboarded_app_registry_service import app_record, register_app, registry_rows
+from services1.policy_as_code_service import evaluate_policy_as_code
 from services1.runtime_intelligence_ui_loader import load_runtime_intelligence_ui
 
 
@@ -73,11 +75,26 @@ def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-def _load_runtime(log_path: str, app_id: str, runtime_label: str, objective: str) -> Dict[str, Any]:
+def _apply_control_tower_assurance(state: Dict[str, Any], use_llm_judge: bool) -> Dict[str, Any]:
+    assurance = run_llm_judge_assurance(state, use_llm=use_llm_judge)
+    state["llm_judge_assurance"] = assurance
+    security = next((row for row in assurance.get("judge_verdicts", []) if row.get("judge_id") == "security_owasp"), {})
+    state["owasp_ai"] = {
+        "status": security.get("verdict", "UNKNOWN"),
+        "security_score": security.get("score", 0),
+        "risk_level": "LOW" if security.get("verdict") == "PASS" else "HIGH" if security.get("verdict") == "FAIL" else "REVIEW",
+        "findings": security.get("evidence_refs", []),
+        "rationale": security.get("rationale", "-"),
+    }
+    state["policy_as_code"] = evaluate_policy_as_code(state)
+    return state
+
+
+def _load_runtime(log_path: str, app_id: str, runtime_label: str, objective: str, use_llm_judge: bool) -> Dict[str, Any]:
     path = Path(log_path)
     if not path.exists():
         raise FileNotFoundError(f"Runtime log not found: {path}")
-    return execute_onboarded_agentic_app(
+    state = execute_onboarded_agentic_app(
         customer_id=runtime_label.strip() or app_id.strip() or "EXTERNAL_APP",
         user_query=objective,
         app_id=JSONL_RUNTIME_LOG_APP_ID,
@@ -87,6 +104,7 @@ def _load_runtime(log_path: str, app_id: str, runtime_label: str, objective: str
             "app_name": app_id.strip() or "External Agentic App",
         },
     )
+    return _apply_control_tower_assurance(state, use_llm_judge)
 
 
 def _jsonl_app_ids(path: Path) -> set:
@@ -123,14 +141,14 @@ def _file_signature(path: Path) -> str:
     return f"{path.resolve()}::{stat.st_mtime_ns}::{stat.st_size}"
 
 
-def _load_watched_runtime(folder_path: str, app_id: str, runtime_label: str, objective: str) -> str:
+def _load_watched_runtime(folder_path: str, app_id: str, runtime_label: str, objective: str, use_llm_judge: bool) -> str:
     latest = _latest_jsonl_file(folder_path, app_id)
     if latest is None:
         return f"No .jsonl runtime log found for app_id={app_id} in watched folder."
     signature = _file_signature(latest)
     if st.session_state.get("watched_runtime_signature") == signature:
         return f"Watching {latest.name}; no new changes."
-    st.session_state.persona_decision_state = _load_runtime(str(latest), app_id, runtime_label, objective)
+    st.session_state.persona_decision_state = _load_runtime(str(latest), app_id, runtime_label, objective, use_llm_judge)
     st.session_state.watched_runtime_signature = signature
     st.session_state.watched_runtime_path = str(latest)
     return f"Loaded {latest.name}."
@@ -289,6 +307,55 @@ def _lifecycle_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _llm_judge_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    assurance = _safe_dict(state.get("llm_judge_assurance"))
+    rows = []
+    for row in _safe_list(assurance.get("judge_verdicts")):
+        if not isinstance(row, dict):
+            continue
+        rows.append({
+            "Judge": row.get("judge_name") or row.get("judge_id"),
+            "Verdict": row.get("verdict"),
+            "Score": row.get("score"),
+            "Confidence": row.get("confidence"),
+            "Engine": row.get("judge_engine") or row.get("engine"),
+            "Model": row.get("judge_model"),
+            "Rationale": row.get("rationale"),
+        })
+    return rows
+
+
+def _owasp_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    owasp = _safe_dict(state.get("owasp_ai"))
+    return [
+        {
+            "OWASP AI Control": "Security / OWASP Judge",
+            "Status": owasp.get("status"),
+            "Score": owasp.get("security_score"),
+            "Risk Level": owasp.get("risk_level"),
+            "Findings": "; ".join(str(item) for item in _safe_list(owasp.get("findings"))) or "-",
+            "Rationale": owasp.get("rationale"),
+        }
+    ]
+
+
+def _policy_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    policy = _safe_dict(state.get("policy_as_code"))
+    rows = []
+    for row in _safe_list(policy.get("checks")):
+        if not isinstance(row, dict):
+            continue
+        rows.append({
+            "Policy ID": row.get("policy_id"),
+            "Passed": "YES" if row.get("passed") else "NO",
+            "Severity": row.get("severity"),
+            "Actual": row.get("actual"),
+            "Expected": row.get("expected"),
+            "Action": row.get("action"),
+        })
+    return rows
+
+
 @st.cache_resource
 def _runtime_ui():
     return load_runtime_intelligence_ui()
@@ -304,13 +371,14 @@ with st.sidebar:
     app_owner = st.text_input("Owner / Team", value="")
     runtime_label = st.text_input("Runtime / Entity Label", value="APP-RUN-001")
     objective = st.text_area("Run Objective", value="External agentic app execution", height=90)
+    use_llm_judge = st.toggle("Enable LLM Judge", value=False)
     mode = st.radio("Ingestion Mode", ["Manual Log File", "Watch Folder"], horizontal=False)
     if mode == "Manual Log File":
         log_path = st.text_input("Canonical JSONL Log Path", value="runtime_events.jsonl")
         selected_log_folder = str(Path(log_path).parent)
         if st.button("Load Persona Decision View", use_container_width=True):
             try:
-                st.session_state.persona_decision_state = _load_runtime(log_path, app_id, runtime_label, objective)
+                st.session_state.persona_decision_state = _load_runtime(log_path, app_id, runtime_label, objective, use_llm_judge)
                 st.session_state.watched_runtime_path = str(Path(log_path))
                 st.success("Runtime loaded.")
             except Exception as exc:
@@ -322,7 +390,7 @@ with st.sidebar:
         watch_enabled = st.toggle("AEGIS Always-On Watcher", value=True)
         if st.button("Scan Now", use_container_width=True) or watch_enabled:
             try:
-                message = _load_watched_runtime(watch_folder, app_id, runtime_label, objective)
+                message = _load_watched_runtime(watch_folder, app_id, runtime_label, objective, use_llm_judge)
                 st.info(message)
             except Exception as exc:
                 st.error(str(exc))
@@ -361,7 +429,7 @@ c3.caption("AEGIS derived")
 c4.metric("Error Code", state.get("error_code") or display.get("error_code", "-"))
 c4.caption("AEGIS normalized")
 
-tabs = st.tabs(["Decision", "Lifecycle", "Registry", "Personas", "Missing Required Variables", "Consistency"])
+tabs = st.tabs(["Decision", "Lifecycle", "LLM Judge", "OWASP AI", "Registry", "Personas", "Missing Required Variables", "Consistency"])
 
 with tabs[0]:
     _render_table("AEGIS Decision Objects", _decision_rows(state))
@@ -379,6 +447,19 @@ with tabs[1]:
     _render_table("Runtime Lifecycle Segregation", lifecycle)
 
 with tabs[2]:
+    assurance = _safe_dict(state.get("llm_judge_assurance"))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Final Judge Verdict", assurance.get("final_verdict", "-"))
+    c2.metric("HITL From Judge", "YES" if assurance.get("hitl_required") else "NO")
+    c3.metric("LLM Enabled", "YES" if assurance.get("llm_enabled") else "NO")
+    st.caption(assurance.get("final_rationale", "-"))
+    _render_table("LLM Judge Committee", _llm_judge_rows(state))
+
+with tabs[3]:
+    _render_table("OWASP AI Controls", _owasp_rows(state))
+    _render_table("Policy-as-Code Security Gates", _policy_rows(state))
+
+with tabs[4]:
     registry = _registry_context(str(state.get("app_id") or app_id))
     rows = registry_rows()
     if registry:
@@ -387,13 +468,13 @@ with tabs[2]:
         st.warning("This runtime app_id is not registered in AEGIS registry.")
     _render_table("Onboarded Agentic Apps Registry", rows)
 
-with tabs[3]:
+with tabs[5]:
     _runtime_ui().render_persona_operating_model(state)
 
-with tabs[4]:
+with tabs[6]:
     _render_table("Required Event Envelope", _missing_rows(state))
 
-with tabs[5]:
+with tabs[7]:
     rows = _safe_list(state.get("canonical_consistency_audit"))
     mismatch_rows = [row for row in rows if isinstance(row, dict) and row.get("Status") == "MISMATCH"]
     if mismatch_rows:
