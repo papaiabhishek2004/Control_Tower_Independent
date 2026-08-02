@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import time
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -84,6 +85,34 @@ def _load_runtime(log_path: str, app_id: str, runtime_label: str, objective: str
             "app_name": app_id.strip() or "External Agentic App",
         },
     )
+
+
+def _latest_jsonl_file(folder_path: str) -> Path | None:
+    folder = Path(folder_path)
+    if not folder.exists() or not folder.is_dir():
+        return None
+    files = [path for path in folder.glob("*.jsonl") if path.is_file()]
+    if not files:
+        return None
+    return max(files, key=lambda path: path.stat().st_mtime)
+
+
+def _file_signature(path: Path) -> str:
+    stat = path.stat()
+    return f"{path.resolve()}::{stat.st_mtime_ns}::{stat.st_size}"
+
+
+def _load_watched_runtime(folder_path: str, app_id: str, runtime_label: str, objective: str) -> str:
+    latest = _latest_jsonl_file(folder_path)
+    if latest is None:
+        return "No .jsonl runtime log found in watched folder."
+    signature = _file_signature(latest)
+    if st.session_state.get("watched_runtime_signature") == signature:
+        return f"Watching {latest.name}; no new changes."
+    st.session_state.persona_decision_state = _load_runtime(str(latest), app_id, runtime_label, objective)
+    st.session_state.watched_runtime_signature = signature
+    st.session_state.watched_runtime_path = str(latest)
+    return f"Loaded {latest.name}."
 
 
 def _decision_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -225,13 +254,32 @@ with st.sidebar:
     app_id = st.text_input("External App ID", value="EXT_APP")
     runtime_label = st.text_input("Runtime / Entity Label", value="APP-RUN-001")
     objective = st.text_area("Run Objective", value="External agentic app execution", height=90)
-    log_path = st.text_input("Canonical JSONL Log Path", value="runtime_events.jsonl")
-    if st.button("Load Persona Decision View", use_container_width=True):
-        try:
-            st.session_state.persona_decision_state = _load_runtime(log_path, app_id, runtime_label, objective)
-            st.success("Runtime loaded.")
-        except Exception as exc:
-            st.error(str(exc))
+    mode = st.radio("Ingestion Mode", ["Manual Log File", "Watch Folder"], horizontal=False)
+    if mode == "Manual Log File":
+        log_path = st.text_input("Canonical JSONL Log Path", value="runtime_events.jsonl")
+        if st.button("Load Persona Decision View", use_container_width=True):
+            try:
+                st.session_state.persona_decision_state = _load_runtime(log_path, app_id, runtime_label, objective)
+                st.session_state.watched_runtime_path = str(Path(log_path))
+                st.success("Runtime loaded.")
+            except Exception as exc:
+                st.error(str(exc))
+    else:
+        watch_folder = st.text_input("Watched Log Folder", value="runtime_logs")
+        refresh_seconds = st.number_input("Refresh Seconds", min_value=2, max_value=60, value=5, step=1)
+        watch_enabled = st.toggle("AEGIS Always-On Watcher", value=True)
+        if st.button("Scan Now", use_container_width=True) or watch_enabled:
+            try:
+                message = _load_watched_runtime(watch_folder, app_id, runtime_label, objective)
+                st.info(message)
+            except Exception as exc:
+                st.error(str(exc))
+        if watch_enabled:
+            st.caption("AEGIS is watching for new or updated JSONL runtime logs.")
+
+watched_path = st.session_state.get("watched_runtime_path")
+if watched_path:
+    st.caption(f"Loaded runtime log: {watched_path}")
 
 state = st.session_state.get("persona_decision_state")
 if not isinstance(state, dict) or not state:
@@ -281,3 +329,7 @@ with tabs[3]:
     else:
         st.success("No canonical consistency mismatches found.")
     _render_table("Canonical Consistency Audit", rows)
+
+if mode == "Watch Folder" and watch_enabled:
+    time.sleep(int(refresh_seconds))
+    st.rerun()

@@ -1,6 +1,6 @@
 ﻿# AEGIS Control Tower Canonical Integration
 
-The reusable Control Tower code lives in `services/control_tower_canonical_service.py`.
+The reusable Control Tower code lives in `services1/control_tower_canonical_service.py`.
 It has no Streamlit dependency and can be imported by another Python service, API,
 agent orchestrator, batch job, or test harness.
 
@@ -127,13 +127,13 @@ External systems should emit these fields where possible:
 An external app can append canonical events to a JSONL text/log file using:
 
 ```bash
-python tools/emit_canonical_runtime_log.py --output runtime_events.jsonl
+python tools1/emit_canonical_runtime_log.py --output runtime_events.jsonl
 ```
 
 Or copy this minimal function into the external app:
 
 ```python
-from tools.emit_canonical_runtime_log import emit_event
+from tools1.emit_canonical_runtime_log import emit_event
 
 emit_event(
     "runtime_events.jsonl",
@@ -166,6 +166,40 @@ emit_event(
     cost_usd=0.0123,
 )
 ```
+
+## Always-On Watcher Mode
+
+For always-on Control Tower monitoring, run:
+
+```bash
+streamlit run app_persona_decision_tower.py
+```
+
+In the sidebar, select:
+
+- `Ingestion Mode = Watch Folder`
+- `Watched Log Folder = runtime_logs`
+- `AEGIS Always-On Watcher = enabled`
+
+AEGIS scans the watched folder for the newest `.jsonl` file. When an onboarded
+app creates or appends to a JSONL file, AEGIS reloads that runtime and updates
+the decision/persona view.
+
+Recommended app log path pattern:
+
+```text
+runtime_logs/YOUR_APP_RUN_001.jsonl
+runtime_logs/YOUR_APP_RUN_002.jsonl
+```
+
+Apps can emit events:
+
+- before starting: `RUNTIME_STARTED`
+- during execution: `AGENT_STARTED`, `AGENT_COMPLETED`, `CONTROL_CHECK`, `EVIDENCE_ATTACHED`
+- before finishing: `DECISION_PROPOSED`, `RUNTIME_COMPLETING`
+- after completion: `FINAL_CANONICAL_OBJECTS`, `RUNTIME_COMPLETED`, `RUNTIME_FAILED`
+
+Manual mode remains available for loading one specific JSONL file.
 
 AEGIS can pick up that file through the JSONL adapter:
 
