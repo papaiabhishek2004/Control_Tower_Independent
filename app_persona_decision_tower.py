@@ -84,16 +84,46 @@ def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def _legacy_security_analysis(query_security: Dict[str, Any]) -> Dict[str, Any]:
+    findings = _safe_list(query_security.get("findings"))
+    status = str(query_security.get("status") or "PASS").upper()
+    score = query_security.get("score", 100 if status == "PASS" else 60)
+    failed = [str(row.get("finding") or row.get("category")) for row in findings if isinstance(row, dict) and row.get("severity") == "CRITICAL"]
+    review = [str(row.get("finding") or row.get("category")) for row in findings if isinstance(row, dict) and row.get("severity") != "CRITICAL"]
+    text = json.dumps(findings, default=str).lower()
+    prompt_detected = any(term in text for term in ("prompt injection", "system prompt", "developer prompt", "jailbreak"))
+    pii_detected = any(term in text for term in ("pii", "sensitive data", "secret", "credential"))
+    tool_detected = any(term in text for term in ("tool", "exfiltration", "network", "delete"))
+    control_status = "FAIL" if status == "FAIL" else "REVIEW" if status == "REVIEW" else "PASS"
+    return {
+        "status": control_status,
+        "security_status": control_status,
+        "security_score": score,
+        "risk_level": "HIGH" if status == "FAIL" else "REVIEW" if status == "REVIEW" else "LOW",
+        "security_grade": "A" if control_status == "PASS" else "C" if control_status == "REVIEW" else "D",
+        "findings": findings,
+        "failed_controls": failed,
+        "review_controls": review,
+        "rationale": query_security.get("rationale"),
+        "prompt_injection": {"status": "FAIL" if prompt_detected else "PASS", "detected": prompt_detected},
+        "jailbreak_detection": {"status": "FAIL" if prompt_detected else "PASS", "detected": prompt_detected},
+        "pii_exposure": {"status": "FAIL" if pii_detected else "PASS", "sensitive_fields": findings if pii_detected else []},
+        "data_leakage": {"status": "FAIL" if pii_detected else "PASS", "detected": pii_detected},
+        "tool_security": {"status": "FAIL" if tool_detected else "PASS", "unauthorized_tools": findings if tool_detected else []},
+        "checks": [
+            {"Control": "Prompt Injection", "Status": "FAIL" if prompt_detected else "PASS", "Detected": prompt_detected},
+            {"Control": "Jailbreak Detection", "Status": "FAIL" if prompt_detected else "PASS", "Detected": prompt_detected},
+            {"Control": "Sensitive Data Exposure", "Status": "FAIL" if pii_detected else "PASS", "Detected": len(findings) if pii_detected else 0},
+            {"Control": "Data Leakage", "Status": "FAIL" if pii_detected else "PASS", "Detected": pii_detected},
+            {"Control": "Tool Security", "Status": "FAIL" if tool_detected else "PASS", "Detected": len(findings) if tool_detected else 0},
+        ],
+    }
+
+
 def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:
     query_security = validate_user_queries(state)
     state["query_security"] = query_security
-    state["security_analysis"] = {
-        "status": query_security.get("status"),
-        "security_score": query_security.get("score"),
-        "findings": query_security.get("findings", []),
-        "failed_controls": query_security.get("findings", []) if query_security.get("status") in {"FAIL", "REVIEW"} else [],
-        "rationale": query_security.get("rationale"),
-    }
+    state["security_analysis"] = _legacy_security_analysis(query_security)
     state["ragas_scores"] = evaluate_rag_quality(state)
     assurance = run_llm_judge_assurance(state, use_llm=True)
     state["llm_judge_assurance"] = assurance
