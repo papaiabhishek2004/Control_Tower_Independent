@@ -73,11 +73,12 @@ measurements = measure_control_tower_objects(
 
 ## LLM Judge and OWASP AI Controls
 
-The independent Control Tower includes AEGIS LLM Judge and OWASP AI controls.
-In the Persona Decision Tower sidebar, use `Enable LLM Judge`.
+The independent Control Tower runs AEGIS LLM Judge and OWASP AI controls for
+every ingested runtime.
 
-- Disabled: AEGIS runs deterministic judge fallback, OWASP checks, and policy gates.
-- Enabled: AEGIS attempts configured LLM judge execution and falls back to deterministic controls if no provider/key is available.
+- AEGIS attempts configured LLM judge execution.
+- OWASP/security and policy gates are always evaluated.
+- If the configured provider cannot run, AEGIS records fallback metadata while preserving the mandatory judge/control result.
 
 The LLM Judge committee includes:
 

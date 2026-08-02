@@ -75,8 +75,8 @@ def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-def _apply_control_tower_assurance(state: Dict[str, Any], use_llm_judge: bool) -> Dict[str, Any]:
-    assurance = run_llm_judge_assurance(state, use_llm=use_llm_judge)
+def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:
+    assurance = run_llm_judge_assurance(state, use_llm=True)
     state["llm_judge_assurance"] = assurance
     security = next((row for row in assurance.get("judge_verdicts", []) if row.get("judge_id") == "security_owasp"), {})
     state["owasp_ai"] = {
@@ -90,7 +90,7 @@ def _apply_control_tower_assurance(state: Dict[str, Any], use_llm_judge: bool) -
     return state
 
 
-def _load_runtime(log_path: str, app_id: str, runtime_label: str, objective: str, use_llm_judge: bool) -> Dict[str, Any]:
+def _load_runtime(log_path: str, app_id: str, runtime_label: str, objective: str) -> Dict[str, Any]:
     path = Path(log_path)
     if not path.exists():
         raise FileNotFoundError(f"Runtime log not found: {path}")
@@ -104,7 +104,7 @@ def _load_runtime(log_path: str, app_id: str, runtime_label: str, objective: str
             "app_name": app_id.strip() or "External Agentic App",
         },
     )
-    return _apply_control_tower_assurance(state, use_llm_judge)
+    return _apply_control_tower_assurance(state)
 
 
 def _jsonl_app_ids(path: Path) -> set:
@@ -141,14 +141,14 @@ def _file_signature(path: Path) -> str:
     return f"{path.resolve()}::{stat.st_mtime_ns}::{stat.st_size}"
 
 
-def _load_watched_runtime(folder_path: str, app_id: str, runtime_label: str, objective: str, use_llm_judge: bool) -> str:
+def _load_watched_runtime(folder_path: str, app_id: str, runtime_label: str, objective: str) -> str:
     latest = _latest_jsonl_file(folder_path, app_id)
     if latest is None:
         return f"No .jsonl runtime log found for app_id={app_id} in watched folder."
     signature = _file_signature(latest)
     if st.session_state.get("watched_runtime_signature") == signature:
         return f"Watching {latest.name}; no new changes."
-    st.session_state.persona_decision_state = _load_runtime(str(latest), app_id, runtime_label, objective, use_llm_judge)
+    st.session_state.persona_decision_state = _load_runtime(str(latest), app_id, runtime_label, objective)
     st.session_state.watched_runtime_signature = signature
     st.session_state.watched_runtime_path = str(latest)
     return f"Loaded {latest.name}."
@@ -371,14 +371,13 @@ with st.sidebar:
     app_owner = st.text_input("Owner / Team", value="")
     runtime_label = st.text_input("Runtime / Entity Label", value="APP-RUN-001")
     objective = st.text_area("Run Objective", value="External agentic app execution", height=90)
-    use_llm_judge = st.toggle("Enable LLM Judge", value=False)
     mode = st.radio("Ingestion Mode", ["Manual Log File", "Watch Folder"], horizontal=False)
     if mode == "Manual Log File":
         log_path = st.text_input("Canonical JSONL Log Path", value="runtime_events.jsonl")
         selected_log_folder = str(Path(log_path).parent)
         if st.button("Load Persona Decision View", use_container_width=True):
             try:
-                st.session_state.persona_decision_state = _load_runtime(log_path, app_id, runtime_label, objective, use_llm_judge)
+                st.session_state.persona_decision_state = _load_runtime(log_path, app_id, runtime_label, objective)
                 st.session_state.watched_runtime_path = str(Path(log_path))
                 st.success("Runtime loaded.")
             except Exception as exc:
@@ -390,7 +389,7 @@ with st.sidebar:
         watch_enabled = st.toggle("AEGIS Always-On Watcher", value=True)
         if st.button("Scan Now", use_container_width=True) or watch_enabled:
             try:
-                message = _load_watched_runtime(watch_folder, app_id, runtime_label, objective, use_llm_judge)
+                message = _load_watched_runtime(watch_folder, app_id, runtime_label, objective)
                 st.info(message)
             except Exception as exc:
                 st.error(str(exc))
@@ -451,7 +450,7 @@ with tabs[2]:
     c1, c2, c3 = st.columns(3)
     c1.metric("Final Judge Verdict", assurance.get("final_verdict", "-"))
     c2.metric("HITL From Judge", "YES" if assurance.get("hitl_required") else "NO")
-    c3.metric("LLM Enabled", "YES" if assurance.get("llm_enabled") else "NO")
+    c3.metric("LLM Judge Required", "YES")
     st.caption(assurance.get("final_rationale", "-"))
     _render_table("LLM Judge Committee", _llm_judge_rows(state))
 
