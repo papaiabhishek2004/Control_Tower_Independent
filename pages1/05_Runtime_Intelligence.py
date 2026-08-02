@@ -1222,7 +1222,10 @@ def render_operational_control_loop(result):
     st.caption("File-backed integration outputs created by AEGIS for onboarded agentic applications.")
     render_table("Operational Control Outputs", _operational_control_rows(result))
     rows_by_name = operation_rows()
+    st.caption("Runtime History, Alerts, Agent Registry, Prompt Registry, and Policy Config are persistent operational stores. They can include previous runs for the same app/runtime.")
     for title in ["Runtime History", "HITL Queue", "Alerts", "Agent Registry", "Prompt Registry", "Policy Config"]:
+        if title in {"Runtime History", "Alerts"}:
+            st.caption(f"{title}: latest persisted records, not only the currently selected runtime.")
         render_table(title, rows_by_name.get(title, []))
 
 

@@ -72,6 +72,10 @@ def _read_jsonl(path: Path, limit: int = 100) -> List[Dict[str, Any]]:
     return rows[-limit:]
 
 
+def _display_value(value: Any, missing: str = "Not emitted by onboarded app") -> Any:
+    return missing if value in (None, "", "-", [], {}) else value
+
+
 def final_decision_packet(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
     state = runtime_state if isinstance(runtime_state, dict) else {}
     apply_decision_authority(state)
@@ -183,8 +187,9 @@ def seed_agent_registry(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
             "agent_name": event.get("agent_name"),
             "agent_type": event.get("agent_type"),
             "expected_phase": event.get("phase"),
-            "allowed_tools": [],
-            "model": event.get("model"),
+            "allowed_tools": event.get("tools_used") or event.get("allowed_tools") or "Not emitted by onboarded app",
+            "model": _display_value(event.get("model")),
+            "model_source": "APP_EMITTED" if event.get("model") not in (None, "", "-", [], {}) else "MISSING_FROM_APP",
             "status": "ACTIVE",
             "updated_at": _now(),
         })
@@ -268,11 +273,19 @@ def complete_operational_cycle(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def operation_rows() -> Dict[str, List[Dict[str, Any]]]:
+    agent_rows = []
+    for row in _safe_list(_read_json(AGENT_REGISTRY_PATH, {"agents": []}).get("agents")):
+        if isinstance(row, dict):
+            cleaned = dict(row)
+            cleaned["model"] = _display_value(cleaned.get("model"))
+            cleaned.setdefault("model_source", "MISSING_FROM_APP" if cleaned.get("model") == "Not emitted by onboarded app" else "APP_EMITTED")
+            cleaned["allowed_tools"] = _display_value(cleaned.get("allowed_tools"))
+            agent_rows.append(cleaned)
     return {
         "Runtime History": _read_jsonl(RUNTIME_HISTORY_PATH, 50),
         "HITL Queue": _read_jsonl(HITL_QUEUE_PATH, 50),
         "Alerts": _read_jsonl(ALERTS_PATH, 50),
-        "Agent Registry": _safe_list(_read_json(AGENT_REGISTRY_PATH, {"agents": []}).get("agents")),
+        "Agent Registry": agent_rows,
         "Prompt Registry": _safe_list(_read_json(PROMPT_REGISTRY_PATH, {"prompts": []}).get("prompts")),
         "Policy Config": [load_policy_config()],
     }
