@@ -207,13 +207,6 @@ with tabs[0]:
     reasons = _safe_list(state.get("hitl_reasons"))
     if reasons:
         _render_table("HITL Reasons", [{"Reason": str(reason)} for reason in reasons])
-    ui = _runtime_ui()
-    with st.container(border=True):
-        ui.render_decision_policy_path(state)
-    with st.container(border=True):
-        ui.render_recommendation(state)
-    with st.container(border=True):
-        ui.render_governance(state)
 
 with tabs[1]:
     _runtime_ui().render_persona_operating_model(state)
