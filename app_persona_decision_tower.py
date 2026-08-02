@@ -189,6 +189,24 @@ def _was_emitted(state: Dict[str, Any], source: str) -> bool:
     return bool(parts) and all(part in emitted for part in parts)
 
 
+def _app_aegis_disagreement(state: Dict[str, Any], label: str, source: str, value: Any) -> str:
+    display = _safe_dict(state.get("canonical_display"))
+    arbitration = _safe_dict(state.get("final_arbitration"))
+    app_recommendation = str(state.get("app_recommendation") or display.get("app_recommendation") or "").upper()
+    aegis_final = str(arbitration.get("aegis_final_decision") or state.get("aegis_final_decision") or state.get("final_recommendation") or "").upper()
+    source_clean = str(source or "").casefold()
+    label_clean = str(label or "").casefold()
+
+    if app_recommendation and aegis_final and app_recommendation != aegis_final:
+        if "recommendation" in source_clean or "recommendation" in label_clean or "governed outcome" in label_clean:
+            return f"YES - App emitted {app_recommendation}; AEGIS final is {aegis_final}"
+
+    if _was_emitted(state, source) and _is_aegis_authored(source):
+        return "YES - source ownership conflict"
+
+    return "NO"
+
+
 def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
     st.subheader(title)
     if not rows:
@@ -369,6 +387,7 @@ def _variable_row(state: Dict[str, Any], label_col: str, label: str, value: Any,
         "Value": _metric_value(value),
         "Emitted by Onboarded App": "YES" if emitted else "NO",
         "AEGIS System Calculated": "YES" if aegis_authored or (has_value and not emitted) else "NO",
+        "AEGIS Disagrees With App": _app_aegis_disagreement(state, label, source, value),
         "Status": "AEGIS CALCULATED" if aegis_authored and has_value else "APP EMITTED" if emitted else "AEGIS CALCULATED" if has_value else "MISSING",
         "Guidance": "AEGIS-derived control value." if aegis_authored and has_value else "Received from onboarded app." if emitted else "Not emitted by Onboarded App; AEGIS calculated it." if has_value else f"Required variable not emitted from Onboarded App: {source}",
     }
@@ -465,6 +484,7 @@ def _persona_value_audit_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "Source Variable": source,
                 "App Emitted": "YES" if emitted else "NO",
                 "AEGIS Calculated": "YES" if aegis_authored or (value not in (None, "", "-") and not emitted and issue != "NOT_REQUIRED") else "NO",
+                "AEGIS Disagrees With App": _app_aegis_disagreement(state, str(row.get("Metric") or ""), source, value),
                 "Audit Status": issue,
                 "Guidance": guidance,
             })
@@ -475,6 +495,7 @@ def _persona_value_audit_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         "Source Variable": "final_arbitration + final_decision_consistency",
         "App Emitted": "NO",
         "AEGIS Calculated": "YES",
+        "AEGIS Disagrees With App": _app_aegis_disagreement(state, "Final route consistency", "final_arbitration + final_decision_consistency", final_decision),
         "Audit Status": "PASS" if _safe_dict(state.get("final_decision_consistency")).get("status") == "PASS" else "REVIEW",
         "Guidance": "Final arbitration is the authority for route and control status.",
     })
