@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from services1.agentic_app_adapters import JSONL_RUNTIME_LOG_APP_ID, execute_onboarded_agentic_app
+from services1.onboarded_app_registry_service import app_record, register_app, registry_rows
 from services1.runtime_intelligence_ui_loader import load_runtime_intelligence_ui
 
 
@@ -113,6 +114,10 @@ def _load_watched_runtime(folder_path: str, app_id: str, runtime_label: str, obj
     st.session_state.watched_runtime_signature = signature
     st.session_state.watched_runtime_path = str(latest)
     return f"Loaded {latest.name}."
+
+
+def _registry_context(app_id: str) -> Dict[str, Any]:
+    return app_record(app_id)
 
 
 def _decision_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -275,11 +280,14 @@ st.caption("Persona-specific view plus AEGIS final decision for onboarded agenti
 with st.sidebar:
     st.header("External App Runtime")
     app_id = st.text_input("External App ID", value="EXT_APP")
+    app_name = st.text_input("External App Name", value="External Agentic App")
+    app_owner = st.text_input("Owner / Team", value="")
     runtime_label = st.text_input("Runtime / Entity Label", value="APP-RUN-001")
     objective = st.text_area("Run Objective", value="External agentic app execution", height=90)
     mode = st.radio("Ingestion Mode", ["Manual Log File", "Watch Folder"], horizontal=False)
     if mode == "Manual Log File":
         log_path = st.text_input("Canonical JSONL Log Path", value="runtime_events.jsonl")
+        selected_log_folder = str(Path(log_path).parent)
         if st.button("Load Persona Decision View", use_container_width=True):
             try:
                 st.session_state.persona_decision_state = _load_runtime(log_path, app_id, runtime_label, objective)
@@ -289,6 +297,7 @@ with st.sidebar:
                 st.error(str(exc))
     else:
         watch_folder = st.text_input("Watched Log Folder", value="runtime_logs")
+        selected_log_folder = watch_folder
         refresh_seconds = st.number_input("Refresh Seconds", min_value=2, max_value=60, value=5, step=1)
         watch_enabled = st.toggle("AEGIS Always-On Watcher", value=True)
         if st.button("Scan Now", use_container_width=True) or watch_enabled:
@@ -299,6 +308,9 @@ with st.sidebar:
                 st.error(str(exc))
         if watch_enabled:
             st.caption("AEGIS is watching for new or updated JSONL runtime logs.")
+    if st.button("Register / Update App", use_container_width=True):
+        register_app(app_id=app_id, app_name=app_name, owner=app_owner, log_folder=selected_log_folder)
+        st.success("Onboarded app registry updated.")
 
 watched_path = st.session_state.get("watched_runtime_path")
 if watched_path:
@@ -329,7 +341,7 @@ c3.caption("AEGIS derived")
 c4.metric("Error Code", state.get("error_code") or display.get("error_code", "-"))
 c4.caption("AEGIS normalized")
 
-tabs = st.tabs(["Decision", "Lifecycle", "Personas", "Missing Required Variables", "Consistency"])
+tabs = st.tabs(["Decision", "Lifecycle", "Registry", "Personas", "Missing Required Variables", "Consistency"])
 
 with tabs[0]:
     _render_table("AEGIS Decision Objects", _decision_rows(state))
@@ -347,12 +359,21 @@ with tabs[1]:
     _render_table("Runtime Lifecycle Segregation", lifecycle)
 
 with tabs[2]:
-    _runtime_ui().render_persona_operating_model(state)
+    registry = _registry_context(str(state.get("app_id") or app_id))
+    rows = registry_rows()
+    if registry:
+        st.success(f"Active registry record found for {registry.get('app_id')}.")
+    else:
+        st.warning("This runtime app_id is not registered in AEGIS registry.")
+    _render_table("Onboarded Agentic Apps Registry", rows)
 
 with tabs[3]:
-    _render_table("Required Event Envelope", _missing_rows(state))
+    _runtime_ui().render_persona_operating_model(state)
 
 with tabs[4]:
+    _render_table("Required Event Envelope", _missing_rows(state))
+
+with tabs[5]:
     rows = _safe_list(state.get("canonical_consistency_audit"))
     mismatch_rows = [row for row in rows if isinstance(row, dict) and row.get("Status") == "MISMATCH"]
     if mismatch_rows:

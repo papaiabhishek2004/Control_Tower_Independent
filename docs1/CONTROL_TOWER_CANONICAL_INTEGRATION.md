@@ -206,6 +206,29 @@ were observed and which phase events are missing.
 
 Manual mode remains available for loading one specific JSONL file.
 
+## Onboarded App Registry
+
+AEGIS maintains a file-backed registry at:
+
+```text
+runtime_registry/onboarded_apps.json
+```
+
+Each onboarded app record contains:
+
+- `app_id`
+- `app_name`
+- `owner`
+- `status`
+- `log_folder`
+- `adapter`
+- `expected_lifecycle_phases`
+- `expected_canonical_fields`
+
+The Persona Decision Tower has a `Registry` tab and a sidebar
+`Register / Update App` action. Register each app once, then have that app emit
+JSONL files into its registered `log_folder`.
+
 AEGIS can pick up that file through the JSONL adapter:
 
 ```python
