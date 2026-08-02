@@ -25,6 +25,11 @@ from services1.email_notification_service import (
 )
 from services1.llm_judge_assurance_service import get_llm_judge_assurance
 from services1.policy_as_code_service import evaluate_policy_as_code
+from services1.query_security_service import validate_user_queries
+from services1.ragas_service import evaluate_rag_quality
+from services1.llm_judge_assurance_service import run_llm_judge_assurance
+from services1.final_arbitration_service import run_final_arbitration
+from services1.control_tower_operations_service import complete_operational_cycle, operation_rows
 from services1.runtime_ingestion_service import events_from_agent_trace
 from services1.control_tower_canonical_service import (
     attach_control_tower_measurements,
@@ -1160,6 +1165,66 @@ def _canonical_quality_scores(result):
     return service_canonical_quality_scores(result)
 
 
+def _legacy_security_analysis(query_security):
+    findings = _safe_list(query_security.get("findings"))
+    status = str(query_security.get("status") or "PASS").upper()
+    score = query_security.get("score", 100 if status == "PASS" else 60)
+    failed = [str(row.get("finding") or row.get("category")) for row in findings if isinstance(row, dict) and row.get("severity") == "CRITICAL"]
+    review = [str(row.get("finding") or row.get("category")) for row in findings if isinstance(row, dict) and row.get("severity") != "CRITICAL"]
+    text = json.dumps(findings, default=str).lower()
+    prompt_detected = any(term in text for term in ("prompt injection", "system prompt", "developer prompt", "jailbreak"))
+    pii_detected = any(term in text for term in ("pii", "sensitive data", "secret", "credential"))
+    tool_detected = any(term in text for term in ("tool", "exfiltration", "network", "delete"))
+    control_status = "FAIL" if status == "FAIL" else "REVIEW" if status == "REVIEW" else "PASS"
+    return {
+        "status": control_status,
+        "security_status": control_status,
+        "security_score": score,
+        "risk_level": "HIGH" if status == "FAIL" else "REVIEW" if status == "REVIEW" else "LOW",
+        "security_grade": "A" if control_status == "PASS" else "C" if control_status == "REVIEW" else "D",
+        "findings": findings,
+        "failed_controls": failed,
+        "review_controls": review,
+        "rationale": query_security.get("rationale"),
+        "prompt_injection": {"status": "FAIL" if prompt_detected else "PASS", "detected": prompt_detected},
+        "jailbreak_detection": {"status": "FAIL" if prompt_detected else "PASS", "detected": prompt_detected},
+        "pii_exposure": {"status": "FAIL" if pii_detected else "PASS", "sensitive_fields": findings if pii_detected else []},
+        "data_leakage": {"status": "FAIL" if pii_detected else "PASS", "detected": pii_detected},
+        "tool_security": {"status": "FAIL" if tool_detected else "PASS", "unauthorized_tools": findings if tool_detected else []},
+        "checks": [
+            {"Control": "Prompt Injection", "Status": "FAIL" if prompt_detected else "PASS", "Detected": prompt_detected},
+            {"Control": "Jailbreak Detection", "Status": "FAIL" if prompt_detected else "PASS", "Detected": prompt_detected},
+            {"Control": "Sensitive Data Exposure", "Status": "FAIL" if pii_detected else "PASS", "Detected": len(findings) if pii_detected else 0},
+            {"Control": "Data Leakage", "Status": "FAIL" if pii_detected else "PASS", "Detected": pii_detected},
+            {"Control": "Tool Security", "Status": "FAIL" if tool_detected else "PASS", "Detected": len(findings) if tool_detected else 0},
+        ],
+    }
+
+
+def _operational_control_rows(result):
+    ops = _safe_dict(result.get("control_tower_operations"))
+    decision = _safe_dict(ops.get("decision_response"))
+    hitl = _safe_dict(ops.get("hitl_queue_item"))
+    return [
+        {"Capability": "Response Return File", "Status": "WRITTEN" if decision.get("response_path") else "NOT WRITTEN", "Location / Value": decision.get("response_path", "-"), "Purpose": "Final ACCEPT / REJECT / RETRY / HITL packet for the onboarded app."},
+        {"Capability": "HITL Review Queue", "Status": hitl.get("queue_status", "NOT REQUIRED"), "Location / Value": hitl.get("review_id", "-"), "Purpose": "Human review queue when AEGIS routes the run to HITL."},
+        {"Capability": "Agent Registry", "Status": "UPDATED", "Location / Value": ops.get("agent_registry_count", 0), "Purpose": "Observed agents maintained for onboarding governance."},
+        {"Capability": "Prompt Template Registry", "Status": "UPDATED", "Location / Value": ops.get("prompt_registry_count", 0), "Purpose": "Observed prompt template IDs and hashes tracked for optimization."},
+        {"Capability": "Runtime History Store", "Status": "APPENDED", "Location / Value": "runtime_history/runs.jsonl", "Purpose": "Persistent execution history across apps and runs."},
+        {"Capability": "Decision Webhook/API Contract", "Status": "AVAILABLE", "Location / Value": ops.get("api_contract_path", "docs1/aegis_decision_api_contract.json"), "Purpose": "Contract for event submission, decision return, and HITL callback."},
+        {"Capability": "Alerting", "Status": f"{len(_safe_list(ops.get('alerts')))} emitted", "Location / Value": "alerts/alerts.jsonl", "Purpose": "Open alerts for HITL, OWASP, RAGAS, and policy blockers."},
+    ]
+
+
+def render_operational_control_loop(result):
+    st.header("Operational Control Loop")
+    st.caption("File-backed integration outputs created by AEGIS for onboarded agentic applications.")
+    render_table("Operational Control Outputs", _operational_control_rows(result))
+    rows_by_name = operation_rows()
+    for title in ["Runtime History", "HITL Queue", "Alerts", "Agent Registry", "Prompt Registry", "Policy Config"]:
+        render_table(title, rows_by_name.get(title, []))
+
+
 def _normalize_runtime_result_for_ui(result):
     """Normalize current and legacy runtime payloads before rendering."""
     if not isinstance(result, dict):
@@ -1574,6 +1639,48 @@ def _normalize_runtime_result_for_ui(result):
         "canonical_runtime_event_contract",
         {},
     ).get("events", runtime_ingestion.get("events", []))
+
+    if not isinstance(result.get("query_security"), dict):
+        query_security = validate_user_queries(result)
+        result["query_security"] = query_security
+    else:
+        query_security = result["query_security"]
+    if not isinstance(result.get("security_analysis"), dict) or not result.get("security_analysis"):
+        result["security_analysis"] = _legacy_security_analysis(query_security)
+    else:
+        result["security_analysis"].update({
+            key: value
+            for key, value in _legacy_security_analysis(query_security).items()
+            if key not in result["security_analysis"] or result["security_analysis"].get(key) in (None, "", "-", [], {})
+        })
+
+    if not isinstance(result.get("ragas_scores"), dict):
+        result["ragas_scores"] = evaluate_rag_quality(result)
+    result["ragas_success"] = bool(_safe_dict(result.get("ragas_scores")).get("status") == "PASS")
+
+    if not isinstance(result.get("llm_judge_assurance"), dict):
+        result["llm_judge_assurance"] = run_llm_judge_assurance(result, use_llm=True)
+
+    security_judge = next(
+        (
+            row for row in _safe_list(_safe_dict(result.get("llm_judge_assurance")).get("judge_verdicts"))
+            if isinstance(row, dict) and row.get("judge_id") == "security_owasp"
+        ),
+        {},
+    )
+    result["owasp_ai"] = {
+        "status": security_judge.get("verdict") or _safe_dict(result.get("security_analysis")).get("status", "UNKNOWN"),
+        "security_score": security_judge.get("score") or _safe_dict(result.get("security_analysis")).get("security_score", 0),
+        "risk_level": "LOW" if security_judge.get("verdict") == "PASS" else "HIGH" if security_judge.get("verdict") == "FAIL" else _safe_dict(result.get("security_analysis")).get("risk_level", "REVIEW"),
+        "findings": security_judge.get("evidence_refs") or _safe_dict(result.get("security_analysis")).get("findings", []),
+        "rationale": security_judge.get("rationale") or _safe_dict(result.get("security_analysis")).get("rationale", "-"),
+    }
+
+    result["policy_as_code"] = evaluate_policy_as_code(result)
+    result["final_arbitration"] = run_final_arbitration(result)
+    if not result.get("_aegis_operations_completed"):
+        complete_operational_cycle(result)
+        result["_aegis_operations_completed"] = True
 
     return result
 
@@ -16907,6 +17014,7 @@ def render_control_tower(result):
         "AI Release Policy Gate",
         "Human Review & Release Gate",
         "Runtime Observability",
+        "Operational Control Loop",
         "Alerts & Notifications",
         "Cache Acceleration",
         "Model Cost & Token Economics",
@@ -16981,12 +17089,20 @@ def render_control_tower(result):
     with tabs[7]:
         with st.container(border=True):
             render_pillar_coverage(
+                ["Governable AI", "Measurable AI", "Auditable AI", "Resilient AI"],
+                "Operational Control Loop shows response files, HITL queue, app and agent registries, prompt registry, runtime history, policy config, API contract, and alert outputs.",
+            )
+            render_operational_control_loop(result)
+
+    with tabs[8]:
+        with st.container(border=True):
+            render_pillar_coverage(
                 ["Resilient AI", "Governable AI"],
                 "Alerts and notifications show which runtime, policy, security, or evidence conditions need escalation.",
             )
             render_monitoring_alerts(result)
 
-    with tabs[8]:
+    with tabs[9]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Scalable AI", "Measurable AI"],
@@ -16994,7 +17110,7 @@ def render_control_tower(result):
             )
             render_cache_intelligence(result)
 
-    with tabs[9]:
+    with tabs[10]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Measurable AI", "Scalable AI"],
@@ -17002,7 +17118,7 @@ def render_control_tower(result):
             )
             render_llm_cost_summary(result)
 
-    with tabs[10]:
+    with tabs[11]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Trustworthy AI", "Auditable AI"],
@@ -17010,7 +17126,7 @@ def render_control_tower(result):
             )
             render_evidence(result)
 
-    with tabs[11]:
+    with tabs[12]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Governable AI", "Trustworthy AI"],
@@ -17022,13 +17138,13 @@ def render_control_tower(result):
         with st.container(border=True):
             render_governance(result)
 
-    with tabs[12]:
+    with tabs[13]:
         with st.container(border=True):
             render_investigation(result)
         with st.container(border=True):
             render_customer(result)
 
-    with tabs[13]:
+    with tabs[14]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Measurable AI", "Resilient AI"],
@@ -17040,7 +17156,7 @@ def render_control_tower(result):
         with st.container(border=True):
             render_tools(result)
 
-    with tabs[14]:
+    with tabs[15]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Trustworthy AI", "Auditable AI"],
@@ -17048,11 +17164,11 @@ def render_control_tower(result):
             )
             render_retrieval(result)
 
-    with tabs[15]:
+    with tabs[16]:
         with st.container(border=True):
             render_control_tower_architecture(result)
 
-    with tabs[16]:
+    with tabs[17]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Governable AI", "Measurable AI", "Auditable AI"],
@@ -17060,7 +17176,7 @@ def render_control_tower(result):
             )
             render_app_onboarding_contract(result)
 
-    with tabs[17]:
+    with tabs[18]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Governable AI", "Measurable AI", "Auditable AI"],
@@ -17068,11 +17184,11 @@ def render_control_tower(result):
             )
             render_missing_runtime_signals(result)
 
-    with tabs[18]:
+    with tabs[19]:
         with st.container(border=True):
             render_technical_project_summary(result)
 
-    with tabs[19]:
+    with tabs[20]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Scalable AI", "Governable AI", "Auditable AI"],
@@ -17080,7 +17196,7 @@ def render_control_tower(result):
             )
             render_ai_asset_registry(result)
 
-    with tabs[20]:
+    with tabs[21]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Auditable AI", "Governable AI"],
@@ -17088,7 +17204,7 @@ def render_control_tower(result):
             )
             render_auditability(result)
 
-    with tabs[21]:
+    with tabs[22]:
         with st.container(border=True):
             render_pillar_coverage(
                 ["Auditable AI", "Trustworthy AI"],
