@@ -23,6 +23,24 @@ REQUIRED_EVENT_FIELDS = (
     "status",
     "timestamp",
 )
+LIFECYCLE_PHASES = {
+    "BEFORE_STARTING": {
+        "label": "Before Starting",
+        "event_types": {"RUNTIME_CREATED", "RUNTIME_STARTING", "RUNTIME_STARTED", "REQUEST_RECEIVED", "INPUT_VALIDATED"},
+    },
+    "DURING_RUNTIME": {
+        "label": "During Runtime",
+        "event_types": {"AGENT_STARTED", "AGENT_COMPLETED", "CONTROL_CHECK", "EVIDENCE_ATTACHED", "EVIDENCE_FOUND", "TOOL_CALLED", "LLM_CALLED"},
+    },
+    "BEFORE_COMPLETION": {
+        "label": "Before Completion",
+        "event_types": {"DECISION_PROPOSED", "RUNTIME_COMPLETING", "FINAL_CANONICAL_OBJECTS", "PRE_COMPLETION_CHECK"},
+    },
+    "AFTER_COMPLETION": {
+        "label": "After Completion",
+        "event_types": {"RUNTIME_COMPLETED", "RUNTIME_FAILED", "AUDIT_WRITTEN", "POST_COMPLETION_AUDIT"},
+    },
+}
 
 
 def _now() -> str:
@@ -53,6 +71,8 @@ def normalize_runtime_event(event: Dict[str, Any], defaults: Dict[str, Any] | No
     runtime_id = source.get("runtime_id") or defaults.get("runtime_id") or "UNKNOWN_RUNTIME"
     agent_name = source.get("agent_name") or source.get("agent") or defaults.get("agent_name") or "UNKNOWN_AGENT"
     agent_id = source.get("agent_id") or source.get("id") or str(agent_name).lower().replace(" ", "_")
+    event_type = _safe_text(source.get("event_type") or source.get("status") or "AGENT_EVENT").upper()
+    lifecycle_phase = normalize_lifecycle_phase(source.get("lifecycle_phase") or source.get("phase"), event_type)
     normalized = {
         "schema_version": SCHEMA_VERSION,
         "runtime_id": _safe_text(runtime_id),
@@ -61,8 +81,9 @@ def normalize_runtime_event(event: Dict[str, Any], defaults: Dict[str, Any] | No
         "agent_id": _safe_text(agent_id),
         "agent_name": _safe_text(agent_name),
         "agent_type": _safe_text(source.get("agent_type") or defaults.get("agent_type") or "APPLICATION_AGENT"),
-        "event_type": _safe_text(source.get("event_type") or source.get("status") or "AGENT_EVENT").upper(),
+        "event_type": event_type,
         "status": _safe_text(source.get("status") or "RECORDED").upper(),
+        "lifecycle_phase": lifecycle_phase,
         "phase": _safe_text(source.get("phase") or defaults.get("phase")),
         "timestamp": _safe_text(source.get("timestamp") or source.get("created_at") or _now()),
         "started_at": source.get("started_at"),
@@ -92,6 +113,62 @@ def normalize_runtime_event(event: Dict[str, Any], defaults: Dict[str, Any] | No
     return normalized
 
 
+def normalize_lifecycle_phase(value: Any, event_type: str = "") -> str:
+    text = _safe_text(value, "").upper().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "START": "BEFORE_STARTING",
+        "STARTING": "BEFORE_STARTING",
+        "BEFORE_START": "BEFORE_STARTING",
+        "PLANNING": "BEFORE_STARTING",
+        "RUNTIME": "DURING_RUNTIME",
+        "DURING": "DURING_RUNTIME",
+        "EXECUTION": "DURING_RUNTIME",
+        "RETRIEVAL": "DURING_RUNTIME",
+        "DECISION": "BEFORE_COMPLETION",
+        "PRE_COMPLETION": "BEFORE_COMPLETION",
+        "COMPLETING": "BEFORE_COMPLETION",
+        "COMPLETION": "AFTER_COMPLETION",
+        "POST_COMPLETION": "AFTER_COMPLETION",
+        "AFTER_COMPLETION": "AFTER_COMPLETION",
+    }
+    if text in LIFECYCLE_PHASES:
+        return text
+    if text in aliases:
+        return aliases[text]
+    event = _safe_text(event_type, "").upper()
+    for phase, meta in LIFECYCLE_PHASES.items():
+        if event in meta["event_types"]:
+            return phase
+    if event.endswith("_STARTED") or event in {"STARTED", "RUNNING"}:
+        return "DURING_RUNTIME"
+    if event.endswith("_COMPLETED") or event in {"COMPLETED", "FAILED"}:
+        return "AFTER_COMPLETION"
+    return "DURING_RUNTIME"
+
+
+def lifecycle_summary(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {phase: [] for phase in LIFECYCLE_PHASES}
+    for event in events or []:
+        if not isinstance(event, dict):
+            continue
+        phase = normalize_lifecycle_phase(event.get("lifecycle_phase") or event.get("phase"), event.get("event_type"))
+        grouped.setdefault(phase, []).append(event)
+    rows = []
+    for phase, meta in LIFECYCLE_PHASES.items():
+        phase_events = grouped.get(phase, [])
+        statuses = {str(event.get("status") or "").upper() for event in phase_events}
+        event_types = sorted({str(event.get("event_type") or "").upper() for event in phase_events if event.get("event_type")})
+        rows.append({
+            "Lifecycle Phase": meta["label"],
+            "Phase Key": phase,
+            "Event Count": len(phase_events),
+            "Status": "MISSING" if not phase_events else "FAILED" if "FAILED" in statuses or "ERROR" in statuses else "RUNNING" if "RUNNING" in statuses else "OBSERVED",
+            "Event Types": ", ".join(event_types) if event_types else "-",
+            "AEGIS Interpretation": "No event emitted for this lifecycle phase." if not phase_events else "AEGIS observed canonical runtime events for this phase.",
+        })
+    return rows
+
+
 def validate_runtime_event(event: Dict[str, Any]) -> Dict[str, Any]:
     missing = [field for field in REQUIRED_EVENT_FIELDS if not event.get(field)]
     return {
@@ -110,6 +187,7 @@ def ingest_runtime_events(events: Iterable[Dict[str, Any]], defaults: Dict[str, 
         "event_count": len(normalized),
         "invalid_count": len(invalid),
         "events": normalized,
+        "lifecycle_summary": lifecycle_summary(normalized),
         "required_fields": list(REQUIRED_EVENT_FIELDS),
         "created_at": _now(),
     }

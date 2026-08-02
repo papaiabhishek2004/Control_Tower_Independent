@@ -194,10 +194,15 @@ runtime_logs/YOUR_APP_RUN_002.jsonl
 
 Apps can emit events:
 
-- before starting: `RUNTIME_STARTED`
-- during execution: `AGENT_STARTED`, `AGENT_COMPLETED`, `CONTROL_CHECK`, `EVIDENCE_ATTACHED`
-- before finishing: `DECISION_PROPOSED`, `RUNTIME_COMPLETING`
-- after completion: `FINAL_CANONICAL_OBJECTS`, `RUNTIME_COMPLETED`, `RUNTIME_FAILED`
+- before starting: `lifecycle_phase=BEFORE_STARTING`, for `RUNTIME_STARTED`
+- during runtime: `lifecycle_phase=DURING_RUNTIME`, for `AGENT_STARTED`, `AGENT_COMPLETED`, `CONTROL_CHECK`, `EVIDENCE_ATTACHED`
+- before completion: `lifecycle_phase=BEFORE_COMPLETION`, for `DECISION_PROPOSED`, `RUNTIME_COMPLETING`, `FINAL_CANONICAL_OBJECTS`
+- after completion: `lifecycle_phase=AFTER_COMPLETION`, for `RUNTIME_COMPLETED`, `RUNTIME_FAILED`, `AUDIT_WRITTEN`
+
+AEGIS also infers the lifecycle phase from `event_type` when
+`lifecycle_phase` is not emitted, but onboarded apps should emit it explicitly.
+The Persona Decision Tower has a `Lifecycle` tab that shows which phase events
+were observed and which phase events are missing.
 
 Manual mode remains available for loading one specific JSONL file.
 

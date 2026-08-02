@@ -241,6 +241,29 @@ def _missing_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
+def _lifecycle_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    contract = _safe_dict(state.get("canonical_runtime_event_contract"))
+    rows = _safe_list(contract.get("lifecycle_summary"))
+    if rows:
+        return rows
+    return [
+        {
+            "Lifecycle Phase": label,
+            "Phase Key": key,
+            "Event Count": 0,
+            "Status": "MISSING",
+            "Event Types": "-",
+            "AEGIS Interpretation": "No event emitted for this lifecycle phase.",
+        }
+        for key, label in [
+            ("BEFORE_STARTING", "Before Starting"),
+            ("DURING_RUNTIME", "During Runtime"),
+            ("BEFORE_COMPLETION", "Before Completion"),
+            ("AFTER_COMPLETION", "After Completion"),
+        ]
+    ]
+
+
 @st.cache_resource
 def _runtime_ui():
     return load_runtime_intelligence_ui()
@@ -306,7 +329,7 @@ c3.caption("AEGIS derived")
 c4.metric("Error Code", state.get("error_code") or display.get("error_code", "-"))
 c4.caption("AEGIS normalized")
 
-tabs = st.tabs(["Decision", "Personas", "Missing Required Variables", "Consistency"])
+tabs = st.tabs(["Decision", "Lifecycle", "Personas", "Missing Required Variables", "Consistency"])
 
 with tabs[0]:
     _render_table("AEGIS Decision Objects", _decision_rows(state))
@@ -315,12 +338,21 @@ with tabs[0]:
         _render_table("HITL Reasons", [{"Reason": str(reason)} for reason in reasons])
 
 with tabs[1]:
-    _runtime_ui().render_persona_operating_model(state)
+    lifecycle = _lifecycle_rows(state)
+    missing_phases = [row for row in lifecycle if isinstance(row, dict) and row.get("Status") == "MISSING"]
+    if missing_phases:
+        st.warning(f"{len(missing_phases)} lifecycle phase(s) have no emitted events.")
+    else:
+        st.success("All lifecycle phases observed.")
+    _render_table("Runtime Lifecycle Segregation", lifecycle)
 
 with tabs[2]:
-    _render_table("Required Event Envelope", _missing_rows(state))
+    _runtime_ui().render_persona_operating_model(state)
 
 with tabs[3]:
+    _render_table("Required Event Envelope", _missing_rows(state))
+
+with tabs[4]:
     rows = _safe_list(state.get("canonical_consistency_audit"))
     mismatch_rows = [row for row in rows if isinstance(row, dict) and row.get("Status") == "MISMATCH"]
     if mismatch_rows:
