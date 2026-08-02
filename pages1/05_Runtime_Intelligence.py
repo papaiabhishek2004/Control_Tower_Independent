@@ -1225,6 +1225,55 @@ def render_operational_control_loop(result):
         render_table(title, rows_by_name.get(title, []))
 
 
+def _sync_final_decision_authority(result):
+    arbitration = _safe_dict(result.get("final_arbitration"))
+    action = str(arbitration.get("aegis_final_decision") or "").upper()
+    if action not in {"ACCEPT", "REJECT", "RETRY", "HITL"}:
+        return result
+    route = {
+        "ACCEPT": "RELEASE",
+        "REJECT": "BLOCKED",
+        "RETRY": "RETURN_FOR_RETRY",
+        "HITL": "PENDING_HITL",
+    }[action]
+    control_status = {
+        "ACCEPT": "PASS",
+        "REJECT": "BLOCKED",
+        "RETRY": "RETRY_REQUIRED",
+        "HITL": "REVIEW",
+    }[action]
+    hitl_required = bool(arbitration.get("hitl_required") or action == "HITL")
+    result["aegis_final_decision"] = action
+    result["effective_release_route"] = route
+    result["hitl_required"] = hitl_required
+    result["human_review_required"] = hitl_required
+    result["control_status"] = control_status
+    result["final_decision_consistency"] = {
+        "status": "PASS",
+        "authority": "final_arbitration.aegis_final_decision",
+        "aegis_final_decision": action,
+        "effective_release_route": route,
+        "hitl_required": hitl_required,
+        "control_status": control_status,
+    }
+    measurements = _safe_dict(result.get("canonical_control_tower_measurements"))
+    release = _safe_dict(measurements.get("release_assessment"))
+    if release:
+        release["release_route"] = route
+        release["review_required"] = hitl_required
+        release["hitl_required"] = hitl_required
+        release["release_allowed"] = action == "ACCEPT"
+        release["governance_status"] = control_status
+        release["rationale"] = arbitration.get("rationale") or release.get("rationale")
+        measurements["release_assessment"] = release
+        result["canonical_control_tower_measurements"] = measurements
+    display = _safe_dict(result.get("canonical_display"))
+    display["control_status"] = control_status
+    display["release_route"] = route
+    result["canonical_display"] = display
+    return result
+
+
 def _normalize_runtime_result_for_ui(result):
     """Normalize current and legacy runtime payloads before rendering."""
     if not isinstance(result, dict):
@@ -1678,6 +1727,7 @@ def _normalize_runtime_result_for_ui(result):
 
     result["policy_as_code"] = evaluate_policy_as_code(result)
     result["final_arbitration"] = run_final_arbitration(result)
+    _sync_final_decision_authority(result)
     if not result.get("_aegis_operations_completed"):
         complete_operational_cycle(result)
         result["_aegis_operations_completed"] = True

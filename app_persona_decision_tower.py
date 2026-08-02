@@ -120,6 +120,55 @@ def _legacy_security_analysis(query_security: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _sync_final_decision_authority(state: Dict[str, Any]) -> Dict[str, Any]:
+    arbitration = _safe_dict(state.get("final_arbitration"))
+    action = str(arbitration.get("aegis_final_decision") or "").upper()
+    if action not in {"ACCEPT", "REJECT", "RETRY", "HITL"}:
+        return state
+    route = {
+        "ACCEPT": "RELEASE",
+        "REJECT": "BLOCKED",
+        "RETRY": "RETURN_FOR_RETRY",
+        "HITL": "PENDING_HITL",
+    }[action]
+    control_status = {
+        "ACCEPT": "PASS",
+        "REJECT": "BLOCKED",
+        "RETRY": "RETRY_REQUIRED",
+        "HITL": "REVIEW",
+    }[action]
+    hitl_required = bool(arbitration.get("hitl_required") or action == "HITL")
+    state["aegis_final_decision"] = action
+    state["effective_release_route"] = route
+    state["hitl_required"] = hitl_required
+    state["human_review_required"] = hitl_required
+    state["control_status"] = control_status
+    state["final_decision_consistency"] = {
+        "status": "PASS",
+        "authority": "final_arbitration.aegis_final_decision",
+        "aegis_final_decision": action,
+        "effective_release_route": route,
+        "hitl_required": hitl_required,
+        "control_status": control_status,
+    }
+    measurements = _safe_dict(state.get("canonical_control_tower_measurements"))
+    release = _safe_dict(measurements.get("release_assessment"))
+    if release:
+        release["release_route"] = route
+        release["review_required"] = hitl_required
+        release["hitl_required"] = hitl_required
+        release["release_allowed"] = action == "ACCEPT"
+        release["governance_status"] = control_status
+        release["rationale"] = arbitration.get("rationale") or release.get("rationale")
+        measurements["release_assessment"] = release
+        state["canonical_control_tower_measurements"] = measurements
+    display = _safe_dict(state.get("canonical_display"))
+    display["control_status"] = control_status
+    display["release_route"] = route
+    state["canonical_display"] = display
+    return state
+
+
 def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:
     query_security = validate_user_queries(state)
     state["query_security"] = query_security
@@ -137,6 +186,7 @@ def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:
     }
     state["policy_as_code"] = evaluate_policy_as_code(state)
     state["final_arbitration"] = run_final_arbitration(state)
+    _sync_final_decision_authority(state)
     complete_operational_cycle(state)
     return state
 
@@ -215,14 +265,15 @@ def _decision_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     release = _safe_dict(_safe_dict(state.get("canonical_control_tower_measurements")).get("release_assessment"))
     health = _safe_dict(state.get("customer_health"))
     rows = [
-        ("AEGIS Final Decision", arbitration.get("aegis_final_decision"), "final_arbitration.aegis_final_decision"),
+        ("AEGIS Final Decision", state.get("aegis_final_decision") or arbitration.get("aegis_final_decision"), "final_arbitration.aegis_final_decision"),
         ("Final Recommendation", state.get("final_recommendation") or display.get("final_recommendation") or display.get("recommendation"), "final_recommendation"),
         ("Required Action", arbitration.get("required_action"), "final_arbitration.required_action"),
         ("LLM Arbitration Used", "YES" if arbitration.get("llm_used") else "NO", "final_arbitration.llm_used"),
         ("Risk Level", state.get("risk_level") or display.get("risk_level"), "risk_level"),
         ("Control Status", state.get("control_status") or display.get("control_status"), "control_status"),
         ("HITL Required", "YES" if state.get("hitl_required") else "NO", "hitl_required"),
-        ("Release Route", release.get("release_route"), "canonical_control_tower_measurements.release_assessment.release_route"),
+        ("Effective Release Route", state.get("effective_release_route") or release.get("release_route"), "final_decision_consistency.effective_release_route"),
+        ("Decision Consistency", _safe_dict(state.get("final_decision_consistency")).get("status"), "final_decision_consistency.status"),
         ("Trust Score", state.get("trust_score") or display.get("trust_score"), "trust_score"),
         ("Confidence", state.get("confidence") or display.get("confidence"), "confidence"),
         ("Relationship Score", health.get("relationship_score"), "customer_health.relationship_score"),
@@ -465,6 +516,47 @@ def _final_arbitration_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _llm_execution_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    ragas = _safe_dict(state.get("ragas_scores"))
+    ragas_llm = _safe_dict(ragas.get("ragas_llm") or state.get("ragas_llm"))
+    assurance = _safe_dict(state.get("llm_judge_assurance"))
+    verdicts = [row for row in _safe_list(assurance.get("judge_verdicts")) if isinstance(row, dict)]
+    llm_judge_used = any(not row.get("fallback_used") and str(row.get("provider") or "").upper() not in {"", "AEGIS_DETERMINISTIC"} for row in verdicts)
+    fallback_count = sum(1 for row in verdicts if row.get("fallback_used"))
+    providers = sorted({str(row.get("provider")) for row in verdicts if row.get("provider")})
+    models = sorted({str(row.get("model")) for row in verdicts if row.get("model")})
+    arbitration = _safe_dict(state.get("final_arbitration"))
+    return [
+        {
+            "LLM Component": "RAGAS Evaluation",
+            "Executed Successfully": "YES" if ragas_llm.get("success") else "NO",
+            "Provider": ragas_llm.get("provider", "-"),
+            "Model": ragas_llm.get("model", "-"),
+            "Status": ragas.get("status", "-"),
+            "Fallback Used": "NO",
+            "Error / Reason": ragas_llm.get("error", "-"),
+        },
+        {
+            "LLM Component": "LLM Judge Committee",
+            "Executed Successfully": "YES" if llm_judge_used else "NO",
+            "Provider": ", ".join(providers) or "-",
+            "Model": ", ".join(models) or "-",
+            "Status": assurance.get("final_verdict", "-"),
+            "Fallback Used": "YES" if fallback_count else "NO",
+            "Error / Reason": f"{fallback_count} deterministic fallback judge(s)" if fallback_count else assurance.get("final_rationale", "-"),
+        },
+        {
+            "LLM Component": "Final Arbitration Judge",
+            "Executed Successfully": "YES" if arbitration.get("llm_used") else "NO",
+            "Provider": arbitration.get("llm_provider", "-"),
+            "Model": arbitration.get("llm_model", "-"),
+            "Status": arbitration.get("aegis_final_decision", "-"),
+            "Fallback Used": "NO" if arbitration.get("llm_used") else "YES",
+            "Error / Reason": arbitration.get("error") or arbitration.get("rationale", "-"),
+        },
+    ]
+
+
 def _operations_summary_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     ops = _safe_dict(state.get("control_tower_operations"))
     decision = _safe_dict(ops.get("decision_response"))
@@ -599,12 +691,14 @@ if not isinstance(state, dict) or not state:
 display = _safe_dict(state.get("canonical_display"))
 arbitration = _safe_dict(state.get("final_arbitration"))
 release = _safe_dict(_safe_dict(state.get("canonical_control_tower_measurements")).get("release_assessment"))
+effective_decision = state.get("aegis_final_decision") or arbitration.get("aegis_final_decision", "-")
+effective_route = state.get("effective_release_route") or release.get("release_route", "-")
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("AEGIS Final Decision", arbitration.get("aegis_final_decision", "-"))
+c1.metric("AEGIS Final Decision", effective_decision)
 c2.metric("Risk", state.get("risk_level") or display.get("risk_level", "-"))
 c3.metric("HITL", "YES" if state.get("hitl_required") else "NO")
-c4.metric("Release Route", release.get("release_route", "-"))
+c4.metric("Effective Route", effective_route)
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Trust", _metric_value(state.get("trust_score") or display.get("trust_score")))
@@ -619,8 +713,14 @@ c4.caption("AEGIS normalized")
 tabs = st.tabs(["Decision", "Lifecycle", "RAGAS", "LLM Judge", "OWASP AI", "Registry", "Operations", "Personas", "Missing Required Variables", "Consistency"])
 
 with tabs[0]:
+    consistency = _safe_dict(state.get("final_decision_consistency"))
+    if consistency.get("status") == "PASS":
+        st.success(f"Decision authority aligned: {consistency.get('aegis_final_decision')} -> {consistency.get('effective_release_route')}.")
+    else:
+        st.warning("Decision authority alignment is unavailable for this runtime.")
     _render_table("AEGIS Decision Objects", _decision_rows(state))
     _render_table("LLM Final Arbitration", _final_arbitration_rows(state))
+    _render_table("LLM Execution Audit", _llm_execution_rows(state))
     reasons = _safe_list(state.get("hitl_reasons"))
     if reasons:
         _render_table("HITL Reasons", [{"Reason": str(reason)} for reason in reasons])
@@ -650,6 +750,7 @@ with tabs[3]:
     c2.metric("HITL From Judge", "YES" if assurance.get("hitl_required") else "NO")
     c3.metric("LLM Judge Required", "YES")
     st.caption(assurance.get("final_rationale", "-"))
+    _render_table("LLM Execution Audit", _llm_execution_rows(state))
     _render_table("LLM Judge Committee", _llm_judge_rows(state))
 
 with tabs[4]:
