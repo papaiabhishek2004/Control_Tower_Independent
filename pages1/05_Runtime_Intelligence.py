@@ -30,6 +30,7 @@ from services1.ragas_service import evaluate_rag_quality
 from services1.llm_judge_assurance_service import run_llm_judge_assurance
 from services1.final_arbitration_service import run_final_arbitration
 from services1.control_tower_operations_service import complete_operational_cycle, operation_rows
+from services1.decision_authority_service import apply_decision_authority
 from services1.runtime_ingestion_service import events_from_agent_trace
 from services1.control_tower_canonical_service import (
     attach_control_tower_measurements,
@@ -1226,64 +1227,7 @@ def render_operational_control_loop(result):
 
 
 def _sync_final_decision_authority(result):
-    arbitration = _safe_dict(result.get("final_arbitration"))
-    action = str(arbitration.get("aegis_final_decision") or "").upper()
-    if action not in {"ACCEPT", "REJECT", "RETRY", "HITL"}:
-        return result
-    route = {
-        "ACCEPT": "RELEASE",
-        "REJECT": "BLOCKED",
-        "RETRY": "RETURN_FOR_RETRY",
-        "HITL": "PENDING_HITL",
-    }[action]
-    control_status = {
-        "ACCEPT": "PASS",
-        "REJECT": "BLOCKED",
-        "RETRY": "RETRY_REQUIRED",
-        "HITL": "REVIEW",
-    }[action]
-    hitl_required = bool(arbitration.get("hitl_required") or action == "HITL")
-    app_recommendation = (
-        result.get("app_recommendation")
-        or result.get("recommendation")
-        or _safe_dict(result.get("canonical_display")).get("recommendation")
-    )
-    if app_recommendation:
-        result["app_recommendation"] = app_recommendation
-    result["aegis_final_decision"] = action
-    result["final_recommendation"] = action
-    result["effective_release_route"] = route
-    result["hitl_required"] = hitl_required
-    result["human_review_required"] = hitl_required
-    result["control_status"] = control_status
-    result["final_decision_consistency"] = {
-        "status": "PASS",
-        "authority": "final_arbitration.aegis_final_decision",
-        "aegis_final_decision": action,
-        "effective_release_route": route,
-        "hitl_required": hitl_required,
-        "control_status": control_status,
-    }
-    measurements = _safe_dict(result.get("canonical_control_tower_measurements"))
-    release = _safe_dict(measurements.get("release_assessment"))
-    if release:
-        release["release_route"] = route
-        release["review_required"] = hitl_required
-        release["hitl_required"] = hitl_required
-        release["release_allowed"] = action == "ACCEPT"
-        release["governance_status"] = control_status
-        release["rationale"] = arbitration.get("rationale") or release.get("rationale")
-        measurements["release_assessment"] = release
-        result["canonical_control_tower_measurements"] = measurements
-    display = _safe_dict(result.get("canonical_display"))
-    if app_recommendation:
-        display["app_recommendation"] = app_recommendation
-        display["recommendation"] = app_recommendation
-    display["final_recommendation"] = action
-    display["control_status"] = control_status
-    display["release_route"] = route
-    result["canonical_display"] = display
-    return result
+    return apply_decision_authority(result)
 
 
 def _normalize_runtime_result_for_ui(result):
@@ -1295,14 +1239,19 @@ def _normalize_runtime_result_for_ui(result):
 
     # Rehydrate live Streamlit projections from the same terminal authorities
     # serialized by the artifact exporter. Never prefer stale phase snapshots.
+    app_recommendation = str(result.get("app_recommendation") or _safe_get(result, "canonical_display", {}).get("app_recommendation") or "").upper()
     canonical_recommendation = str(result.get("recommendation") or "").upper()
-    if canonical_recommendation not in {"APPROVE", "MONITOR", "ESCALATE"}:
+    if canonical_recommendation not in {"ACCEPT", "REJECT", "RETRY", "HITL", "APPROVE", "MONITOR", "ESCALATE"}:
         canonical_recommendation = str(
             _safe_get(result, "recommendation_package", {}).get("recommendation")
             or _safe_get(result, "decision_snapshot", {}).get("recommendation")
             or canonical_recommendation
             or "UNKNOWN"
         ).upper()
+    if not app_recommendation and canonical_recommendation in {"APPROVE", "MONITOR", "ESCALATE"}:
+        app_recommendation = canonical_recommendation
+    if app_recommendation:
+        result["app_recommendation"] = app_recommendation
     if canonical_recommendation:
         result["recommendation"] = canonical_recommendation
 
@@ -15462,6 +15411,11 @@ def render_persona_operating_model(result):
         or release_assessment.get("release_route")
         or "-"
     )
+    app_recommendation_label = (
+        result.get("app_recommendation")
+        or _safe_get(result, "canonical_display", {}).get("app_recommendation")
+        or "-"
+    )
     release_route_label = release_assessment.get("release_route") or "-"
     security = _safe_dict(result.get("security_analysis") or result.get("security"))
     security_score = _numeric_score(security.get("security_score"), "-")
@@ -17017,7 +16971,8 @@ def render_persona_operating_model(result):
     add_persona_metric("Audit / Regulator Viewer", "Artifact inventory completeness", "Shows whether reports, JSON/CSV, evidence, and package outputs were generated.", f"Artifact files: {len(artifact_files)}", "artifact_export.manifest.files")
     add_persona_metric("Audit / Regulator Viewer", "Canonical consistency status", "Shows whether live UI, runtime state, and exported records agree.", "PASS" if mismatch_count == 0 else f"{mismatch_count} mismatch(es)", "canonical consistency audit")
 
-    add_persona_metric("AI Product / Application Owner", "Recommendation outcome", "Shows the application-facing decision or proposed action.", recommendation_label, "release_assessment.recommendation or governance_status or release_route")
+    add_persona_metric("AI Product / Application Owner", "AEGIS final recommendation", "Shows the governed recommendation after AEGIS controls and LLM arbitration.", recommendation_label, "release_assessment.recommendation or final_recommendation")
+    add_persona_metric("AI Product / Application Owner", "Onboarded app proposal", "Shows the recommendation emitted by the onboarded app before AEGIS controls.", app_recommendation_label, "app_recommendation or emitted recommendation")
     add_persona_metric("AI Product / Application Owner", "Cost-to-value signal", "Shows the execution cost attached to this governed outcome.", cost, "result.estimated_cost_usd or token_metrics.estimated_cost_usd")
     add_persona_metric("AI Product / Application Owner", "Release route", "Shows whether the application outcome is ready to publish or needs action.", release_route_label, "release_assessment.release_route")
     add_persona_metric("AI Product / Application Owner", "Repeatability / reuse signal", "Shows whether similar future application requests can be accelerated.", f"Cache: {cache_status} | Hit ratio: {cache_hit_ratio}%", "cache_lookup/cache_metrics")

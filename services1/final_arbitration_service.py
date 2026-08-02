@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+from services1.decision_authority_service import apply_decision_authority
 from services1.local_secret_service import local_config_value
 
 
@@ -37,7 +38,7 @@ def _control_packet(state: Dict[str, Any]) -> Dict[str, Any]:
         "runtime_id": state.get("runtime_id"),
         "app_id": state.get("app_id"),
         "user_query": state.get("user_query") or state.get("query") or state.get("original_query"),
-        "app_recommendation": state.get("recommendation") or display.get("recommendation"),
+        "app_recommendation": state.get("app_recommendation") or display.get("app_recommendation") or state.get("recommendation") or display.get("recommendation"),
         "deterministic_final_recommendation": state.get("final_recommendation") or display.get("final_recommendation"),
         "risk_level": state.get("risk_level") or display.get("risk_level"),
         "trust_score": state.get("trust_score") or display.get("trust_score"),
@@ -250,4 +251,5 @@ def run_final_arbitration(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
         result = _fallback_decision(packet, "All configured final arbitration LLM providers failed.", attempts)
     state["final_arbitration"] = result
     state["aegis_final_decision"] = result["aegis_final_decision"]
+    apply_decision_authority(state)
     return result

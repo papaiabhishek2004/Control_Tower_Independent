@@ -29,6 +29,7 @@ from services1.control_tower_operations_service import (
     operation_rows,
     save_policy_config,
 )
+from services1.decision_authority_service import apply_decision_authority
 from services1.final_arbitration_service import run_final_arbitration
 from services1.llm_judge_assurance_service import run_llm_judge_assurance
 from services1.onboarded_app_registry_service import app_record, register_app, registry_rows
@@ -160,64 +161,7 @@ def _legacy_security_analysis(query_security: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _sync_final_decision_authority(state: Dict[str, Any]) -> Dict[str, Any]:
-    arbitration = _safe_dict(state.get("final_arbitration"))
-    action = str(arbitration.get("aegis_final_decision") or "").upper()
-    if action not in {"ACCEPT", "REJECT", "RETRY", "HITL"}:
-        return state
-    route = {
-        "ACCEPT": "RELEASE",
-        "REJECT": "BLOCKED",
-        "RETRY": "RETURN_FOR_RETRY",
-        "HITL": "PENDING_HITL",
-    }[action]
-    control_status = {
-        "ACCEPT": "PASS",
-        "REJECT": "BLOCKED",
-        "RETRY": "RETRY_REQUIRED",
-        "HITL": "REVIEW",
-    }[action]
-    hitl_required = bool(arbitration.get("hitl_required") or action == "HITL")
-    app_recommendation = (
-        state.get("app_recommendation")
-        or state.get("recommendation")
-        or _safe_dict(state.get("canonical_display")).get("recommendation")
-    )
-    if app_recommendation:
-        state["app_recommendation"] = app_recommendation
-    state["aegis_final_decision"] = action
-    state["final_recommendation"] = action
-    state["effective_release_route"] = route
-    state["hitl_required"] = hitl_required
-    state["human_review_required"] = hitl_required
-    state["control_status"] = control_status
-    state["final_decision_consistency"] = {
-        "status": "PASS",
-        "authority": "final_arbitration.aegis_final_decision",
-        "aegis_final_decision": action,
-        "effective_release_route": route,
-        "hitl_required": hitl_required,
-        "control_status": control_status,
-    }
-    measurements = _safe_dict(state.get("canonical_control_tower_measurements"))
-    release = _safe_dict(measurements.get("release_assessment"))
-    if release:
-        release["release_route"] = route
-        release["review_required"] = hitl_required
-        release["hitl_required"] = hitl_required
-        release["release_allowed"] = action == "ACCEPT"
-        release["governance_status"] = control_status
-        release["rationale"] = arbitration.get("rationale") or release.get("rationale")
-        measurements["release_assessment"] = release
-        state["canonical_control_tower_measurements"] = measurements
-    display = _safe_dict(state.get("canonical_display"))
-    if app_recommendation:
-        display["app_recommendation"] = app_recommendation
-        display["recommendation"] = app_recommendation
-    display["final_recommendation"] = action
-    display["control_status"] = control_status
-    display["release_route"] = route
-    state["canonical_display"] = display
-    return state
+    return apply_decision_authority(state)
 
 
 def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:

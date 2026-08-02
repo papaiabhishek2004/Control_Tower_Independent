@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+from services1.decision_authority_service import apply_decision_authority
+
 from services1.policy_as_code_service import DEFAULT_POLICY
 
 
@@ -72,6 +74,7 @@ def _read_jsonl(path: Path, limit: int = 100) -> List[Dict[str, Any]]:
 
 def final_decision_packet(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
     state = runtime_state if isinstance(runtime_state, dict) else {}
+    apply_decision_authority(state)
     arbitration = _safe_dict(state.get("final_arbitration"))
     return {
         "schema_version": "AEGIS-FINAL-DECISION-2026.08",
@@ -80,7 +83,7 @@ def final_decision_packet(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
         "app_id": state.get("app_id"),
         "aegis_final_decision": arbitration.get("aegis_final_decision"),
         "aegis_final_recommendation": state.get("final_recommendation") or arbitration.get("aegis_final_decision"),
-        "app_recommendation": state.get("app_recommendation") or state.get("recommendation") or _safe_dict(state.get("canonical_display")).get("recommendation"),
+        "app_recommendation": state.get("app_recommendation") or _safe_dict(state.get("canonical_display")).get("app_recommendation"),
         "required_action": arbitration.get("required_action"),
         "retry_reason": arbitration.get("retry_reason"),
         "hitl_required": bool(arbitration.get("hitl_required") or state.get("hitl_required")),
