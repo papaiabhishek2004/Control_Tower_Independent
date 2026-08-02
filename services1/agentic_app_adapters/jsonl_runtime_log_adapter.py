@@ -42,6 +42,15 @@ class JsonlRuntimeLogAdapter:
         final = _latest_final_event(events)
         runtime_id = final.get("runtime_id") or defaults["runtime_id"] or _first_value(events, "runtime_id") or "UNKNOWN_RUNTIME"
         app_id = final.get("app_id") or defaults["app_id"] or _first_value(events, "app_id") or self.info.app_id
+        user_query = (
+            final.get("user_query")
+            or final.get("original_query")
+            or final.get("query")
+            or _first_value(events, "user_query")
+            or _first_value(events, "original_query")
+            or _first_value(events, "query")
+            or request.user_query
+        )
         evidence_ids = _collect_values(events, "evidence_ids")
         evidence_pack = [{"evidence_id": evidence_id, "source": "external_runtime_log"} for evidence_id in evidence_ids]
         emitted_final_fields = {key for key, value in final.items() if value not in (None, "")}
@@ -54,7 +63,9 @@ class JsonlRuntimeLogAdapter:
             "status": str(final.get("status") or "COMPLETED").upper(),
             "runtime_status": str(final.get("status") or "COMPLETED").upper(),
             "customer_id": request.customer_id,
-            "query": request.user_query,
+            "query": user_query,
+            "user_query": user_query,
+            "original_query": user_query,
             "runtime_ingestion": contract,
             "canonical_runtime_event_contract": contract,
             "canonical_runtime_events": contract.get("events", []),

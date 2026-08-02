@@ -104,6 +104,22 @@ RAGAS uses Groq directly through `GROQ_API_KEY` or `.env.local`. It does not use
 local model fallback in the independent Control Tower path. If the key/provider
 is unavailable, AEGIS records a failed mandatory RAGAS control result.
 
+## User Query OWASP Validation
+
+Onboarded apps should emit `user_query`, `original_query`, or `query` in JSONL
+events. AEGIS validates these queries for OWASP AI risks before RAGAS, LLM Judge,
+and policy gates run.
+
+AEGIS checks for:
+
+- prompt injection / jailbreak phrases
+- attempts to reveal system or developer prompts
+- sensitive data / PII in user queries
+- data exfiltration or unsafe tool-use requests
+
+Unsafe query findings are stored in `query_security`, copied into
+`security_analysis`, shown in the `OWASP AI` tab, and used by policy gates.
+
 ## AEGIS-Derived HITL Logic
 
 External apps should not decide the authoritative `hitl_required` value. They

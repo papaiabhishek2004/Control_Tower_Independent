@@ -26,6 +26,7 @@ from services1.agentic_app_adapters import JSONL_RUNTIME_LOG_APP_ID, execute_onb
 from services1.llm_judge_assurance_service import run_llm_judge_assurance
 from services1.onboarded_app_registry_service import app_record, register_app, registry_rows
 from services1.policy_as_code_service import evaluate_policy_as_code
+from services1.query_security_service import validate_user_queries
 from services1.ragas_service import evaluate_rag_quality
 from services1.runtime_intelligence_ui_loader import load_runtime_intelligence_ui
 
@@ -77,6 +78,14 @@ def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
 
 
 def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:
+    query_security = validate_user_queries(state)
+    state["security_analysis"] = {
+        "status": query_security.get("status"),
+        "security_score": query_security.get("score"),
+        "findings": query_security.get("findings", []),
+        "failed_controls": query_security.get("findings", []) if query_security.get("status") in {"FAIL", "REVIEW"} else [],
+        "rationale": query_security.get("rationale"),
+    }
     state["ragas_scores"] = evaluate_rag_quality(state)
     assurance = run_llm_judge_assurance(state, use_llm=True)
     state["llm_judge_assurance"] = assurance
@@ -341,6 +350,32 @@ def _owasp_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _query_security_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    query_security = _safe_dict(state.get("query_security"))
+    findings = _safe_list(query_security.get("findings"))
+    if not findings:
+        return [{
+            "Source": "runtime query/events",
+            "Status": query_security.get("status", "PASS"),
+            "Severity": "-",
+            "OWASP Category": "User Query Validation",
+            "Finding": query_security.get("rationale", "No unsafe user-query patterns detected."),
+            "Query Excerpt": "-",
+        }]
+    return [
+        {
+            "Source": row.get("source"),
+            "Status": "FAIL" if row.get("severity") == "CRITICAL" else "REVIEW",
+            "Severity": row.get("severity"),
+            "OWASP Category": row.get("category"),
+            "Finding": row.get("finding"),
+            "Query Excerpt": row.get("query_excerpt"),
+        }
+        for row in findings
+        if isinstance(row, dict)
+    ]
+
+
 def _policy_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     policy = _safe_dict(state.get("policy_as_code"))
     rows = []
@@ -478,6 +513,7 @@ with tabs[3]:
     _render_table("LLM Judge Committee", _llm_judge_rows(state))
 
 with tabs[4]:
+    _render_table("User Query OWASP Validation", _query_security_rows(state))
     _render_table("OWASP AI Controls", _owasp_rows(state))
     _render_table("Policy-as-Code Security Gates", _policy_rows(state))
 
