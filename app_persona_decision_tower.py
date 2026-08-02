@@ -235,12 +235,59 @@ def _aegis_override_applied(state: Dict[str, Any], label: str, source: str) -> s
     return "NO"
 
 
+def _application_emitted_value(state: Dict[str, Any], label: str, source: str, value: Any) -> str:
+    display = _safe_dict(state.get("canonical_display"))
+    app_recommendation = state.get("app_recommendation") or display.get("app_recommendation")
+    source_clean = str(source or "").casefold()
+    label_clean = str(label or "").casefold()
+    if "recommendation" in source_clean or "recommendation" in label_clean or "governed outcome" in label_clean:
+        return _metric_value(app_recommendation)
+    if _was_emitted(state, source):
+        return _metric_value(value)
+    return "-"
+
+
+def _aegis_governed_value(state: Dict[str, Any], label: str, source: str, value: Any) -> str:
+    arbitration = _safe_dict(state.get("final_arbitration"))
+    final_decision = arbitration.get("aegis_final_decision") or state.get("aegis_final_decision") or state.get("final_recommendation")
+    source_clean = str(source or "").casefold()
+    label_clean = str(label or "").casefold()
+    if "recommendation" in source_clean or "recommendation" in label_clean or "governed outcome" in label_clean:
+        return _metric_value(final_decision)
+    if "release route" in label_clean or "final route" in label_clean:
+        return _metric_value(state.get("effective_release_route") or value)
+    if _is_aegis_authored(source):
+        return _metric_value(value)
+    return "-"
+
+
 def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
     st.subheader(title)
     if not rows:
         st.info("No data available.")
         return
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    df = pd.DataFrame(rows)
+    priority = [
+        "Decision Object",
+        "Persona",
+        "Metric",
+        "Variable Name",
+        "Displayed Value",
+        "Value",
+        "Value Source",
+        "Application Emitted Value",
+        "AEGIS Governed Value",
+        "AEGIS Override Applied",
+        "App Emitted",
+        "Emitted by Onboarded App",
+        "AEGIS Calculated",
+        "AEGIS System Calculated",
+        "Audit Status",
+        "Status",
+        "Guidance",
+    ]
+    ordered = [col for col in priority if col in df.columns] + [col for col in df.columns if col not in priority]
+    st.dataframe(df[ordered], use_container_width=True, hide_index=True)
 
 
 def _legacy_security_analysis(query_security: Dict[str, Any]) -> Dict[str, Any]:
@@ -414,6 +461,8 @@ def _variable_row(state: Dict[str, Any], label_col: str, label: str, value: Any,
         "Variable Name": source,
         "Value": _metric_value(value),
         "Value Source": _value_source_label(emitted, aegis_authored, has_value),
+        "Application Emitted Value": _application_emitted_value(state, label, source, value),
+        "AEGIS Governed Value": _aegis_governed_value(state, label, source, value),
         "AEGIS Override Applied": _aegis_override_applied(state, label, source),
         "Emitted by Onboarded App": "YES" if emitted else "NO",
         "AEGIS System Calculated": "YES" if aegis_authored or (has_value and not emitted) else "NO",
@@ -512,6 +561,8 @@ def _persona_value_audit_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "Metric": row.get("Metric"),
                 "Displayed Value": value,
                 "Value Source": _value_source_label(emitted, aegis_authored, value not in (None, "", "-"), issue == "NOT_REQUIRED"),
+                "Application Emitted Value": _application_emitted_value(state, str(row.get("Metric") or ""), source, value),
+                "AEGIS Governed Value": _aegis_governed_value(state, str(row.get("Metric") or ""), source, value),
                 "AEGIS Override Applied": _aegis_override_applied(state, str(row.get("Metric") or ""), source),
                 "Source Variable": source,
                 "App Emitted": "YES" if emitted else "NO",
@@ -525,6 +576,8 @@ def _persona_value_audit_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         "Metric": "Final route consistency",
         "Displayed Value": f"{final_decision} -> {route or '-'} / {control_status or '-'}",
         "Value Source": "AEGIS_CONTROL_TOWER",
+        "Application Emitted Value": _metric_value(state.get("app_recommendation") or _safe_dict(state.get("canonical_display")).get("app_recommendation")),
+        "AEGIS Governed Value": f"{final_decision} -> {route or '-'} / {control_status or '-'}",
         "AEGIS Override Applied": _aegis_override_applied(state, "Final route consistency", "final_arbitration + final_decision_consistency"),
         "Source Variable": "final_arbitration + final_decision_consistency",
         "App Emitted": "NO",
