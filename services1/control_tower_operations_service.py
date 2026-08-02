@@ -87,6 +87,12 @@ def final_decision_packet(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
         "confidence": state.get("confidence") or _safe_dict(state.get("canonical_display")).get("confidence"),
         "control_status": state.get("control_status") or _safe_dict(state.get("canonical_display")).get("control_status"),
         "decision_source": arbitration.get("decision_source"),
+        "llm_used": arbitration.get("llm_used"),
+        "llm_provider": arbitration.get("llm_provider"),
+        "llm_model": arbitration.get("llm_model"),
+        "fallback_used": arbitration.get("fallback_used"),
+        "provider_attempts": arbitration.get("provider_attempts", []),
+        "deterministic_guardrail_action": arbitration.get("deterministic_guardrail_action"),
         "rationale": arbitration.get("rationale"),
     }
 

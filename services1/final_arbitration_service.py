@@ -112,12 +112,21 @@ def _fallback_decision(packet: Dict[str, Any], error: str, attempts: List[Dict[s
         "fallback_used": True,
         "deterministic_guardrail_action": _guardrail_action(packet),
         "rationale": f"Final arbitration LLM could not run: {error}",
-        "required_action": "Route to HITL." if action == "HITL" else "Reject response." if action == "REJECT" else "Return to onboarded app for retry.",
+        "required_action": _required_action(action),
         "retry_reason": "Mandatory RAGAS/control failure or LLM arbitration unavailable." if action == "RETRY" else None,
         "hitl_required": action == "HITL",
         "control_packet": packet,
         "error": error,
     }
+
+
+def _required_action(action: str) -> str:
+    return {
+        "ACCEPT": "Return accepted response to onboarded app.",
+        "REJECT": "Reject and block the onboarded app response.",
+        "RETRY": "Return to onboarded app for retry.",
+        "HITL": "Route to HITL.",
+    }.get(str(action or "").upper(), "Route to HITL.")
 
 
 def _prompt(packet: Dict[str, Any]) -> str:
@@ -134,8 +143,18 @@ def _result_from_parsed(parsed: Dict[str, Any], packet: Dict[str, Any], provider
     action = str(parsed.get("aegis_final_decision") or "").upper()
     if action not in VALID_ACTIONS:
         action = guardrail or "HITL"
-    if guardrail in {"REJECT", "RETRY"} and action == "ACCEPT":
+    if guardrail in VALID_ACTIONS:
         action = guardrail
+    parsed_required_action = str(parsed.get("required_action") or "").upper()
+    required_action = parsed.get("required_action")
+    if action == "RETRY" and "RETRY" not in parsed_required_action:
+        required_action = _required_action(action)
+    elif action == "REJECT" and not any(term in parsed_required_action for term in {"REJECT", "BLOCK"}):
+        required_action = _required_action(action)
+    elif action == "ACCEPT" and not any(term in parsed_required_action for term in {"ACCEPT", "RETURN"}):
+        required_action = _required_action(action)
+    elif action == "HITL" and "HITL" not in parsed_required_action:
+        required_action = _required_action(action)
     return {
         "decision_id": f"AEGIS-FINAL-{datetime.now().strftime('%Y%m%d%H%M%S')}",
         "created_at": datetime.now().isoformat(),
@@ -147,8 +166,8 @@ def _result_from_parsed(parsed: Dict[str, Any], packet: Dict[str, Any], provider
         "fallback_used": False,
         "deterministic_guardrail_action": guardrail,
         "rationale": parsed.get("rationale") or f"{provider} arbitration completed.",
-        "required_action": parsed.get("required_action") or action,
-        "retry_reason": parsed.get("retry_reason"),
+        "required_action": required_action or _required_action(action),
+        "retry_reason": parsed.get("retry_reason") if action == "RETRY" else None,
         "hitl_required": bool(parsed.get("hitl_required") or action == "HITL"),
         "confidence": parsed.get("confidence"),
         "control_packet": packet,
