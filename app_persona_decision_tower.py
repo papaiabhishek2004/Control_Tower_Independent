@@ -177,7 +177,15 @@ def _sync_final_decision_authority(state: Dict[str, Any]) -> Dict[str, Any]:
         "HITL": "REVIEW",
     }[action]
     hitl_required = bool(arbitration.get("hitl_required") or action == "HITL")
+    app_recommendation = (
+        state.get("app_recommendation")
+        or state.get("recommendation")
+        or _safe_dict(state.get("canonical_display")).get("recommendation")
+    )
+    if app_recommendation:
+        state["app_recommendation"] = app_recommendation
     state["aegis_final_decision"] = action
+    state["final_recommendation"] = action
     state["effective_release_route"] = route
     state["hitl_required"] = hitl_required
     state["human_review_required"] = hitl_required
@@ -202,6 +210,10 @@ def _sync_final_decision_authority(state: Dict[str, Any]) -> Dict[str, Any]:
         measurements["release_assessment"] = release
         state["canonical_control_tower_measurements"] = measurements
     display = _safe_dict(state.get("canonical_display"))
+    if app_recommendation:
+        display["app_recommendation"] = app_recommendation
+        display["recommendation"] = app_recommendation
+    display["final_recommendation"] = action
     display["control_status"] = control_status
     display["release_route"] = route
     state["canonical_display"] = display
@@ -305,7 +317,8 @@ def _decision_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     health = _safe_dict(state.get("customer_health"))
     rows = [
         ("AEGIS Final Decision", state.get("aegis_final_decision") or arbitration.get("aegis_final_decision"), "final_arbitration.aegis_final_decision"),
-        ("Final Recommendation", state.get("final_recommendation") or display.get("final_recommendation") or display.get("recommendation"), "final_recommendation"),
+        ("AEGIS Final Recommendation", state.get("final_recommendation") or display.get("final_recommendation"), "final_recommendation"),
+        ("Onboarded App Recommendation", state.get("app_recommendation") or display.get("app_recommendation") or display.get("recommendation"), "recommendation"),
         ("Required Action", arbitration.get("required_action"), "final_arbitration.required_action"),
         ("LLM Arbitration Used", "YES" if arbitration.get("llm_used") else "NO", "final_arbitration.llm_used"),
         ("Risk Level", state.get("risk_level") or display.get("risk_level"), "risk_level"),
@@ -352,7 +365,8 @@ def _persona_rows(state: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
 
     return {
         "Executive": [
-            _persona_metric("Governed outcome", state.get("final_recommendation") or display.get("recommendation"), "Can the app outcome be consumed?", "final_recommendation"),
+            _persona_metric("Governed outcome", state.get("final_recommendation") or display.get("final_recommendation"), "Can the app outcome be consumed?", "final_recommendation"),
+            _persona_metric("App proposed recommendation", state.get("app_recommendation") or display.get("app_recommendation") or display.get("recommendation"), "What the onboarded app requested before AEGIS controls.", "recommendation"),
             _persona_metric("Release route", release.get("release_route"), "Shows release, monitor, or HITL path.", "release_assessment.release_route"),
             _persona_metric("Trust and confidence", f"Trust {_metric_value(state.get('trust_score'))} | Confidence {_metric_value(state.get('confidence'))}", "Reliability of the decision.", "trust_score, confidence"),
             _persona_metric("Business health", f"Relationship {_metric_value(health.get('relationship_score'))} | Health {_metric_value(health.get('health_score'))}", "AEGIS executive score-card signal.", "customer_health"),

@@ -1243,7 +1243,15 @@ def _sync_final_decision_authority(result):
         "HITL": "REVIEW",
     }[action]
     hitl_required = bool(arbitration.get("hitl_required") or action == "HITL")
+    app_recommendation = (
+        result.get("app_recommendation")
+        or result.get("recommendation")
+        or _safe_dict(result.get("canonical_display")).get("recommendation")
+    )
+    if app_recommendation:
+        result["app_recommendation"] = app_recommendation
     result["aegis_final_decision"] = action
+    result["final_recommendation"] = action
     result["effective_release_route"] = route
     result["hitl_required"] = hitl_required
     result["human_review_required"] = hitl_required
@@ -1268,6 +1276,10 @@ def _sync_final_decision_authority(result):
         measurements["release_assessment"] = release
         result["canonical_control_tower_measurements"] = measurements
     display = _safe_dict(result.get("canonical_display"))
+    if app_recommendation:
+        display["app_recommendation"] = app_recommendation
+        display["recommendation"] = app_recommendation
+    display["final_recommendation"] = action
     display["control_status"] = control_status
     display["release_route"] = route
     result["canonical_display"] = display

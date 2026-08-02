@@ -79,6 +79,8 @@ def final_decision_packet(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
         "runtime_id": state.get("runtime_id"),
         "app_id": state.get("app_id"),
         "aegis_final_decision": arbitration.get("aegis_final_decision"),
+        "aegis_final_recommendation": state.get("final_recommendation") or arbitration.get("aegis_final_decision"),
+        "app_recommendation": state.get("app_recommendation") or state.get("recommendation") or _safe_dict(state.get("canonical_display")).get("recommendation"),
         "required_action": arbitration.get("required_action"),
         "retry_reason": arbitration.get("retry_reason"),
         "hitl_required": bool(arbitration.get("hitl_required") or state.get("hitl_required")),
