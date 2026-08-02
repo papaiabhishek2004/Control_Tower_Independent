@@ -1,0 +1,23 @@
+{
+  "policy_version": "AEGIS-POLICY-2026.07",
+  "trust_min_for_auto_approval": 70.0,
+  "confidence_min_for_auto_approval": 60.0,
+  "minimum_evidence_count": 1,
+  "max_agent_execution_time_ms": 120000,
+  "max_retries": 3,
+  "block_on_owasp_fail": true,
+  "block_on_pii": true,
+  "require_hitl_for_risk_levels": [
+    "HIGH",
+    "CRITICAL",
+    "REVIEW_REQUIRED",
+    "INSUFFICIENT_EVIDENCE",
+    "CUSTOMER_NOT_FOUND",
+    "UNKNOWN"
+  ],
+  "allowed_recommendations": [
+    "APPROVE",
+    "MONITOR",
+    "ESCALATE"
+  ]
+}

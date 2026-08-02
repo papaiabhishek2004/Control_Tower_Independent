@@ -301,6 +301,67 @@ The Persona Decision Tower has a `Registry` tab and a sidebar
 `Register / Update App` action. Register each app once, then have that app emit
 JSONL files into its registered `log_folder`.
 
+## Operational Control Loop
+
+For every loaded runtime, AEGIS now writes operational outputs that other
+agentic systems can consume.
+
+```text
+runtime log -> AEGIS measurement -> LLM/RAGAS/OWASP/policy checks
+    -> final arbitration -> response file / HITL queue / alerts / history
+```
+
+File-backed outputs:
+
+- `decision_outbox/<app_id>/<runtime_id>_decision.json`: final response packet returned to the onboarded app.
+- `runtime_history/runs.jsonl`: append-only run history.
+- `hitl_queue/reviews.jsonl`: pending human review items when AEGIS routes to HITL.
+- `alerts/alerts.jsonl`: HITL, OWASP, RAGAS, and policy alerts.
+- `runtime_registry/agent_registry.json`: observed agents for onboarded apps.
+- `runtime_registry/prompt_registry.json`: observed prompt template IDs and hashes.
+- `config/aegis_policy.json`: editable control policy thresholds.
+- `docs1/aegis_decision_api_contract.json`: lightweight API/webhook contract.
+
+The decision packet contains:
+
+- `runtime_id`
+- `app_id`
+- `aegis_final_decision`: `ACCEPT`, `REJECT`, `RETRY`, or `HITL`
+- `required_action`
+- `retry_reason`
+- `hitl_required`
+- `risk_level`
+- `trust_score`
+- `confidence`
+- `control_status`
+- `decision_source`
+- `rationale`
+
+The Persona Decision Tower has an `Operations` tab showing response file,
+runtime history, HITL queue, alerts, agent registry, prompt registry, policy
+config, and the decision API contract location.
+
+## Prompt Template Registry
+
+Onboarded apps should emit:
+
+- `prompt_template_id`
+- `prompt_hash`
+- `prompt_version`
+
+AEGIS uses these values to track prompt inventory and suggest optimization
+patterns such as role/task/context/output-format templates, explicit evidence
+requirements, refusal handling, and retry-safe structured JSON outputs.
+
+## Decision API Contract
+
+The current independent package is file-backed. The generated API contract
+defines the equivalent service endpoints for teams that want HTTP integration:
+
+- `POST /runtime-events`: submit canonical runtime events.
+- `GET /decision/{app_id}/{runtime_id}`: read the final AEGIS decision packet.
+- `POST /hitl/{review_id}`: submit reviewer decision/override.
+
 Sample full canonical event:
 
 ```text

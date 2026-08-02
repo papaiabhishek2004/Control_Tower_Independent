@@ -23,6 +23,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from services1.agentic_app_adapters import JSONL_RUNTIME_LOG_APP_ID, execute_onboarded_agentic_app
+from services1.control_tower_operations_service import (
+    complete_operational_cycle,
+    load_policy_config,
+    operation_rows,
+    save_policy_config,
+)
 from services1.final_arbitration_service import run_final_arbitration
 from services1.llm_judge_assurance_service import run_llm_judge_assurance
 from services1.onboarded_app_registry_service import app_record, register_app, registry_rows
@@ -80,6 +86,7 @@ def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
 
 def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:
     query_security = validate_user_queries(state)
+    state["query_security"] = query_security
     state["security_analysis"] = {
         "status": query_security.get("status"),
         "security_score": query_security.get("score"),
@@ -100,6 +107,7 @@ def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:
     }
     state["policy_as_code"] = evaluate_policy_as_code(state)
     state["final_arbitration"] = run_final_arbitration(state)
+    complete_operational_cycle(state)
     return state
 
 
@@ -427,6 +435,84 @@ def _final_arbitration_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _operations_summary_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    ops = _safe_dict(state.get("control_tower_operations"))
+    decision = _safe_dict(ops.get("decision_response"))
+    hitl = _safe_dict(ops.get("hitl_queue_item"))
+    return [
+        {
+            "Capability": "Response Return File",
+            "Status": "WRITTEN" if decision.get("response_path") else "NOT WRITTEN",
+            "Location / Value": decision.get("response_path", "-"),
+            "Purpose": "Final ACCEPT / REJECT / RETRY / HITL packet for onboarded app.",
+        },
+        {
+            "Capability": "HITL Review Queue",
+            "Status": hitl.get("queue_status", "NOT REQUIRED"),
+            "Location / Value": hitl.get("review_id", "-"),
+            "Purpose": "Manual review queue when AEGIS routes the run to HITL.",
+        },
+        {
+            "Capability": "Agent Registry",
+            "Status": "UPDATED",
+            "Location / Value": ops.get("agent_registry_count", 0),
+            "Purpose": "Observed agents maintained for onboarding governance.",
+        },
+        {
+            "Capability": "Prompt Template Registry",
+            "Status": "UPDATED",
+            "Location / Value": ops.get("prompt_registry_count", 0),
+            "Purpose": "Observed prompt templates and hashes tracked for optimization.",
+        },
+        {
+            "Capability": "Runtime History Store",
+            "Status": "APPENDED",
+            "Location / Value": "runtime_history/runs.jsonl",
+            "Purpose": "Persistent execution history across apps and runs.",
+        },
+        {
+            "Capability": "Decision Webhook/API Contract",
+            "Status": "AVAILABLE",
+            "Location / Value": ops.get("api_contract_path", "docs1/aegis_decision_api_contract.json"),
+            "Purpose": "Contract for submit events, read decision, and HITL callback.",
+        },
+        {
+            "Capability": "Alerting",
+            "Status": f"{len(_safe_list(ops.get('alerts')))} emitted",
+            "Location / Value": "alerts/alerts.jsonl",
+            "Purpose": "Open alerts for HITL, OWASP, RAGAS, and policy blockers.",
+        },
+    ]
+
+
+def _render_policy_editor() -> None:
+    policy = load_policy_config()
+    st.subheader("Control Policy")
+    c1, c2, c3 = st.columns(3)
+    trust_min = c1.number_input("Auto-approval trust minimum", min_value=0.0, max_value=100.0, value=float(policy.get("trust_min_for_auto_approval", 70.0)), step=1.0)
+    confidence_min = c2.number_input("Auto-approval confidence minimum", min_value=0.0, max_value=100.0, value=float(policy.get("confidence_min_for_auto_approval", 60.0)), step=1.0)
+    evidence_min = c3.number_input("Minimum evidence count", min_value=0, max_value=100, value=int(policy.get("minimum_evidence_count", 1)), step=1)
+    c1, c2, c3 = st.columns(3)
+    block_owasp = c1.toggle("Block on OWASP fail", value=bool(policy.get("block_on_owasp_fail", True)))
+    block_pii = c2.toggle("Block on PII", value=bool(policy.get("block_on_pii", True)))
+    max_retries = c3.number_input("Max retries", min_value=0, max_value=10, value=int(policy.get("max_retries", 3)), step=1)
+    risk_text = st.text_input(
+        "Risk levels requiring HITL",
+        value=", ".join(str(item) for item in _safe_list(policy.get("require_hitl_for_risk_levels"))),
+    )
+    if st.button("Save Control Policy", use_container_width=True):
+        save_policy_config({
+            "trust_min_for_auto_approval": trust_min,
+            "confidence_min_for_auto_approval": confidence_min,
+            "minimum_evidence_count": evidence_min,
+            "max_retries": max_retries,
+            "block_on_owasp_fail": block_owasp,
+            "block_on_pii": block_pii,
+            "require_hitl_for_risk_levels": [item.strip().upper() for item in risk_text.split(",") if item.strip()],
+        })
+        st.success("Control policy saved.")
+
+
 @st.cache_resource
 def _runtime_ui():
     return load_runtime_intelligence_ui()
@@ -500,7 +586,7 @@ c3.caption("AEGIS derived")
 c4.metric("Error Code", state.get("error_code") or display.get("error_code", "-"))
 c4.caption("AEGIS normalized")
 
-tabs = st.tabs(["Decision", "Lifecycle", "RAGAS", "LLM Judge", "OWASP AI", "Registry", "Personas", "Missing Required Variables", "Consistency"])
+tabs = st.tabs(["Decision", "Lifecycle", "RAGAS", "LLM Judge", "OWASP AI", "Registry", "Operations", "Personas", "Missing Required Variables", "Consistency"])
 
 with tabs[0]:
     _render_table("AEGIS Decision Objects", _decision_rows(state))
@@ -551,12 +637,19 @@ with tabs[5]:
     _render_table("Onboarded Agentic Apps Registry", rows)
 
 with tabs[6]:
-    _runtime_ui().render_persona_operating_model(state)
+    _render_table("Operational Control Outputs", _operations_summary_rows(state))
+    rows_by_name = operation_rows()
+    for title in ["Runtime History", "HITL Queue", "Alerts", "Agent Registry", "Prompt Registry", "Policy Config"]:
+        _render_table(title, rows_by_name.get(title, []))
+    _render_policy_editor()
 
 with tabs[7]:
-    _render_table("Required Event Envelope", _missing_rows(state))
+    _runtime_ui().render_persona_operating_model(state)
 
 with tabs[8]:
+    _render_table("Required Event Envelope", _missing_rows(state))
+
+with tabs[9]:
     rows = _safe_list(state.get("canonical_consistency_audit"))
     mismatch_rows = [row for row in rows if isinstance(row, dict) and row.get("Status") == "MISMATCH"]
     if mismatch_rows:

@@ -1,0 +1,27 @@
+{
+  "name": "AEGIS Decision API Contract",
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/runtime-events",
+      "purpose": "Onboarded app submits JSONL-equivalent events."
+    },
+    {
+      "method": "GET",
+      "path": "/decision/{app_id}/{runtime_id}",
+      "purpose": "Onboarded app reads final AEGIS decision packet."
+    },
+    {
+      "method": "POST",
+      "path": "/hitl/{review_id}",
+      "purpose": "Reviewer submits HITL outcome."
+    }
+  ],
+  "decision_values": [
+    "ACCEPT",
+    "REJECT",
+    "RETRY",
+    "HITL"
+  ],
+  "generated_at": "2026-08-02T14:27:15.291390+00:00"
+}
