@@ -255,14 +255,18 @@ def _registry_context(app_id: str) -> Dict[str, Any]:
 
 
 def _decision_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    _sync_final_decision_authority(state)
     display = _safe_dict(state.get("canonical_display"))
     arbitration = _safe_dict(state.get("final_arbitration"))
+    final_action = str(arbitration.get("aegis_final_decision") or state.get("aegis_final_decision") or "").upper()
+    final_recommendation = final_action if final_action in {"ACCEPT", "REJECT", "RETRY", "HITL"} else state.get("final_recommendation") or display.get("final_recommendation")
+    app_recommendation = state.get("app_recommendation") or display.get("app_recommendation")
     release = _safe_dict(_safe_dict(state.get("canonical_control_tower_measurements")).get("release_assessment"))
     health = _safe_dict(state.get("customer_health"))
     rows = [
-        ("AEGIS Final Decision", state.get("aegis_final_decision") or arbitration.get("aegis_final_decision"), "final_arbitration.aegis_final_decision"),
-        ("AEGIS Final Recommendation", state.get("final_recommendation") or display.get("final_recommendation"), "final_recommendation"),
-        ("Onboarded App Recommendation", state.get("app_recommendation") or display.get("app_recommendation") or display.get("recommendation"), "recommendation"),
+        ("AEGIS Final Decision", final_action or state.get("aegis_final_decision"), "final_arbitration.aegis_final_decision"),
+        ("AEGIS Final Recommendation", final_recommendation, "final_recommendation"),
+        ("Onboarded App Recommendation", app_recommendation, "recommendation"),
         ("Required Action", arbitration.get("required_action"), "final_arbitration.required_action"),
         ("LLM Arbitration Used", "YES" if arbitration.get("llm_used") else "NO", "final_arbitration.llm_used"),
         ("Risk Level", state.get("risk_level") or display.get("risk_level"), "risk_level"),
@@ -736,6 +740,8 @@ if not isinstance(state, dict) or not state:
     st.code("python tools1\\emit_canonical_runtime_log.py --output runtime_events.jsonl --runtime-id RUN-001 --app-id EXT_APP")
     st.stop()
 
+_sync_final_decision_authority(state)
+st.session_state.persona_decision_state = state
 display = _safe_dict(state.get("canonical_display"))
 arbitration = _safe_dict(state.get("final_arbitration"))
 release = _safe_dict(_safe_dict(state.get("canonical_control_tower_measurements")).get("release_assessment"))
