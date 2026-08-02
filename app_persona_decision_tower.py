@@ -207,6 +207,34 @@ def _app_aegis_disagreement(state: Dict[str, Any], label: str, source: str, valu
     return "NO"
 
 
+def _value_source_label(emitted: bool, aegis_authored: bool, has_value: bool, not_required: bool = False) -> str:
+    if not_required:
+        return "NOT REQUIRED"
+    if emitted:
+        return "ONBOARDED_APP"
+    if aegis_authored or has_value:
+        return "AEGIS_CONTROL_TOWER"
+    return "NOT_AVAILABLE"
+
+
+def _aegis_override_applied(state: Dict[str, Any], label: str, source: str) -> str:
+    display = _safe_dict(state.get("canonical_display"))
+    arbitration = _safe_dict(state.get("final_arbitration"))
+    app_value = str(state.get("app_recommendation") or display.get("app_recommendation") or "").upper()
+    aegis_value = str(arbitration.get("aegis_final_decision") or state.get("aegis_final_decision") or state.get("final_recommendation") or "").upper()
+    if not app_value or not aegis_value or app_value == aegis_value:
+        return "NO"
+
+    source_clean = str(source or "").casefold()
+    label_clean = str(label or "").casefold()
+    if "recommendation" in source_clean or "recommendation" in label_clean or "governed outcome" in label_clean:
+        return f"YES - Application emitted {app_value}; AEGIS overrode to {aegis_value}"
+    if "final route" in label_clean:
+        route = str(state.get("effective_release_route") or "").upper()
+        return f"YES - Application emitted {app_value}; AEGIS route is {route or aegis_value}"
+    return "NO"
+
+
 def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
     st.subheader(title)
     if not rows:
@@ -385,9 +413,11 @@ def _variable_row(state: Dict[str, Any], label_col: str, label: str, value: Any,
         label_col: label,
         "Variable Name": source,
         "Value": _metric_value(value),
-        "AEGIS Disagrees With App": _app_aegis_disagreement(state, label, source, value),
+        "Value Source": _value_source_label(emitted, aegis_authored, has_value),
+        "AEGIS Override Applied": _aegis_override_applied(state, label, source),
         "Emitted by Onboarded App": "YES" if emitted else "NO",
         "AEGIS System Calculated": "YES" if aegis_authored or (has_value and not emitted) else "NO",
+        "AEGIS Disagrees With App": _app_aegis_disagreement(state, label, source, value),
         "Status": "AEGIS CALCULATED" if aegis_authored and has_value else "APP EMITTED" if emitted else "AEGIS CALCULATED" if has_value else "MISSING",
         "Guidance": "AEGIS-derived control value." if aegis_authored and has_value else "Received from onboarded app." if emitted else "Not emitted by Onboarded App; AEGIS calculated it." if has_value else f"Required variable not emitted from Onboarded App: {source}",
     }
@@ -481,10 +511,12 @@ def _persona_value_audit_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "Persona": persona,
                 "Metric": row.get("Metric"),
                 "Displayed Value": value,
-                "AEGIS Disagrees With App": _app_aegis_disagreement(state, str(row.get("Metric") or ""), source, value),
+                "Value Source": _value_source_label(emitted, aegis_authored, value not in (None, "", "-"), issue == "NOT_REQUIRED"),
+                "AEGIS Override Applied": _aegis_override_applied(state, str(row.get("Metric") or ""), source),
                 "Source Variable": source,
                 "App Emitted": "YES" if emitted else "NO",
                 "AEGIS Calculated": "YES" if aegis_authored or (value not in (None, "", "-") and not emitted and issue != "NOT_REQUIRED") else "NO",
+                "AEGIS Disagrees With App": _app_aegis_disagreement(state, str(row.get("Metric") or ""), source, value),
                 "Audit Status": issue,
                 "Guidance": guidance,
             })
@@ -492,10 +524,12 @@ def _persona_value_audit_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         "Persona": "Decision Authority",
         "Metric": "Final route consistency",
         "Displayed Value": f"{final_decision} -> {route or '-'} / {control_status or '-'}",
-        "AEGIS Disagrees With App": _app_aegis_disagreement(state, "Final route consistency", "final_arbitration + final_decision_consistency", final_decision),
+        "Value Source": "AEGIS_CONTROL_TOWER",
+        "AEGIS Override Applied": _aegis_override_applied(state, "Final route consistency", "final_arbitration + final_decision_consistency"),
         "Source Variable": "final_arbitration + final_decision_consistency",
         "App Emitted": "NO",
         "AEGIS Calculated": "YES",
+        "AEGIS Disagrees With App": _app_aegis_disagreement(state, "Final route consistency", "final_arbitration + final_decision_consistency", final_decision),
         "Audit Status": "PASS" if _safe_dict(state.get("final_decision_consistency")).get("status") == "PASS" else "REVIEW",
         "Guidance": "Final arbitration is the authority for route and control status.",
     })
