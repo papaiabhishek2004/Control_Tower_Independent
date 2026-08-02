@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+runtime_events.jsonl
+.env
+.env.local
+AEGIS_RESULTS/
+.aegis_cache/
