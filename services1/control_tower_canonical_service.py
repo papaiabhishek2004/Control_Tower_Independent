@@ -208,6 +208,11 @@ def derive_trust_score(runtime_state: Dict[str, Any]) -> float:
 
 def derive_risk_level(runtime_state: Dict[str, Any]) -> str:
     result = safe_dict(runtime_state)
+    emitted = result.get("risk_level") or safe_get(result.get("risk"), "risk_level")
+    if not is_unknown_value(emitted):
+        normalized = str(emitted).upper()
+        if normalized in {"LOW", "MEDIUM", "HIGH", "CRITICAL", "REVIEW"}:
+            return normalized
     error_code = normalize_error_code(result)
     control_status = derive_control_status(result)
     trust_score = derive_trust_score(result)
@@ -467,11 +472,16 @@ def canonical_display_payload(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
     }
     if isinstance(existing, dict) and existing:
         payload.update({key: value for key, value in existing.items() if not is_unknown_value(value)})
-        payload["recommendation"] = payload.get("recommendation") or payload["final_recommendation"]
-        payload["final_recommendation"] = payload.get("final_recommendation") or payload["recommendation"]
-        payload["risk_level"] = payload.get("risk_level") or risk_level
-        payload["control_status"] = payload.get("control_status") or derive_control_status(result)
-        payload["error_code"] = payload.get("error_code") or normalize_error_code(result)
+    if is_unknown_value(payload.get("recommendation")):
+        payload["recommendation"] = recommendation
+    if is_unknown_value(payload.get("final_recommendation")):
+        payload["final_recommendation"] = payload.get("recommendation") or recommendation
+    if is_unknown_value(payload.get("risk_level")):
+        payload["risk_level"] = risk_level
+    if is_unknown_value(payload.get("control_status")):
+        payload["control_status"] = derive_control_status(result)
+    if is_unknown_value(payload.get("error_code")):
+        payload["error_code"] = normalize_error_code(result)
     return payload
 
 
@@ -515,13 +525,15 @@ def canonical_consistency_audit_rows(runtime_state: Dict[str, Any]) -> List[Dict
     display = canonical_display_payload(result)
     compliance_status = canonical_compliance_status(result)
     release = governance_release_assessment(result)
+    recommendation = display.get("recommendation") or display.get("final_recommendation") or runtime_recommendation_and_risk(result)[0]
+    final_recommendation = display.get("final_recommendation") or recommendation
     expected = {
-        "recommendation": display["recommendation"],
-        "decision": display["recommendation"],
-        "risk_level": display["risk_level"],
-        "final_recommendation": display.get("final_recommendation", display["recommendation"]),
-        "control_status": display["control_status"],
-        "error_code": display["error_code"],
+        "recommendation": recommendation,
+        "decision": recommendation,
+        "risk_level": display.get("risk_level") or runtime_recommendation_and_risk(result)[1],
+        "final_recommendation": final_recommendation,
+        "control_status": display.get("control_status") or derive_control_status(result),
+        "error_code": display.get("error_code") or normalize_error_code(result),
         "compliance_status": compliance_status,
         "trust_score": round(numeric_score(display["trust_score"]), 1),
         "confidence": round(numeric_score(display["confidence"]), 1),
