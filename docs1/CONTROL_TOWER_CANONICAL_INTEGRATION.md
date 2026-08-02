@@ -223,7 +223,8 @@ Each onboarded app record contains:
 - `log_folder`
 - `adapter`
 - `expected_lifecycle_phases`
-- `expected_canonical_fields`
+- `required_event_envelope_fields` containing the 7 mandatory event fields
+- `expected_canonical_fields` containing the 36 canonical parameters
 
 The Persona Decision Tower has a `Registry` tab and a sidebar
 `Register / Update App` action. Register each app once, then have that app emit
