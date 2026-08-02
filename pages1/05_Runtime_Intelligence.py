@@ -5797,7 +5797,7 @@ def _runtime_query_pair(result):
         or result.get("rewritten_query")
         or result.get("updated_query")
         or result.get("decision_snapshot", {}).get("rewritten_query")
-        or ""
+        or "No query updater is available"
     )
     return original_query, rewritten_query
 
