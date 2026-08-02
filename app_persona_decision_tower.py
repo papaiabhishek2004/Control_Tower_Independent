@@ -113,6 +113,15 @@ def _state_default_model(state: Dict[str, Any]) -> str:
     )
 
 
+def _policy_signal(policy_id: Any, value: Any, passed: bool) -> Any:
+    text = str(value or "").strip()
+    if passed and str(policy_id) == "POLICY_OWASP_BLOCK" and text.lower() in {"no blocking finding", "no blocking owasp/security finding"}:
+        return "CLEAR - no OWASP/security blocker detected"
+    if passed and str(policy_id) == "POLICY_PII_BLOCK" and text.lower() in {"no blocking pii", "no blocking pii finding", "no pii leakage signal"}:
+        return "CLEAR - no PII leakage detected"
+    return value
+
+
 def _nested_value(state: Dict[str, Any], source: str) -> Any:
     value: Any = state
     for part in source.split("."):
@@ -588,13 +597,14 @@ def _policy_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     for row in _safe_list(policy.get("checks")):
         if not isinstance(row, dict):
             continue
+        passed = bool(row.get("passed"))
         rows.append({
             "Policy ID": row.get("policy_id"),
-            "Passed": "YES" if row.get("passed") else "NO",
+            "Gate Result": "PASS" if passed else "FAIL",
             "Severity": row.get("severity"),
-            "Actual": row.get("actual"),
-            "Expected": row.get("expected"),
-            "Action": row.get("action"),
+            "Observed Signal": _policy_signal(row.get("policy_id"), row.get("actual"), passed),
+            "Required Condition": row.get("expected"),
+            "Action If Failed": row.get("action"),
         })
     return rows
 

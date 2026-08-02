@@ -7160,11 +7160,11 @@ def render_human_review_release_gate(result):
         checks = [
             {
                 "Policy ID": row.get("policy_id"),
-                "Result": "PASS" if row.get("passed") else "REVIEW",
+                "Gate Result": "PASS" if row.get("passed") else "FAIL",
                 "Severity": row.get("severity"),
-                "Actual": row.get("actual"),
-                "Expected": row.get("expected"),
-                "Action": row.get("action"),
+                "Observed Signal": _policy_signal_display(row.get("policy_id"), row.get("actual"), bool(row.get("passed"))),
+                "Required Condition": row.get("expected"),
+                "Action If Failed": row.get("action"),
             }
             for row in policy_as_code.get("checks", []) or []
             if isinstance(row, dict)
@@ -13984,6 +13984,15 @@ def _agent_adoption_registry_rows(result):
             }
         )
     return rows
+
+
+def _policy_signal_display(policy_id, value, passed):
+    text = str(value or "").strip()
+    if passed and str(policy_id) == "POLICY_OWASP_BLOCK" and text.lower() in {"no blocking finding", "no blocking owasp/security finding"}:
+        return "CLEAR - no OWASP/security blocker detected"
+    if passed and str(policy_id) == "POLICY_PII_BLOCK" and text.lower() in {"no blocking pii", "no blocking pii finding", "no pii leakage signal"}:
+        return "CLEAR - no PII leakage detected"
+    return value
 
 
 def _agent_telemetry_log_schema_rows():

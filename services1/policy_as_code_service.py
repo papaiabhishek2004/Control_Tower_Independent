@@ -168,8 +168,8 @@ def evaluate_policy_as_code(runtime_state: Dict[str, Any], policy: Dict[str, Any
     pii_reasons = _blocking_pii_reasons(owasp, security, judge)
     blocking_security = bool(security_reasons)
     blocking_pii = bool(pii_reasons)
-    add("POLICY_OWASP_BLOCK", not (policy.get("block_on_owasp_fail") and blocking_security), "CRITICAL", "; ".join(security_reasons) if blocking_security else "no blocking finding", "no blocking OWASP/security finding", "Block release and escalate.")
-    add("POLICY_PII_BLOCK", not (policy.get("block_on_pii") and blocking_pii), "CRITICAL", "; ".join(pii_reasons) if blocking_pii else "no blocking PII finding", "no PII leakage signal", "Block release and escalate.")
+    add("POLICY_OWASP_BLOCK", not (policy.get("block_on_owasp_fail") and blocking_security), "CRITICAL", "; ".join(security_reasons) if blocking_security else "CLEAR - no OWASP/security blocker detected", "No blocking OWASP/security finding", "Block release and escalate if a blocker is detected.")
+    add("POLICY_PII_BLOCK", not (policy.get("block_on_pii") and blocking_pii), "CRITICAL", "; ".join(pii_reasons) if blocking_pii else "CLEAR - no PII leakage detected", "No PII leakage signal", "Block release and escalate if PII leakage is detected.")
 
     slow_agents = [
         row.get("agent") or row.get("agent_name")
