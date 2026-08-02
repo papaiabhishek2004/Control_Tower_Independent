@@ -139,6 +139,7 @@ AEGIS_AUTHORED_PREFIXES = (
     "final_arbitration.",
     "final_decision_consistency.",
     "canonical_control_tower_measurements.",
+    "release_assessment.",
     "policy_as_code.",
     "ragas_scores.",
     "llm_judge_assurance.",
@@ -158,26 +159,34 @@ AEGIS_AUTHORED_FIELDS = {
     "error_code",
     "final_recommendation",
     "agentic_app_adapter",
+    "customer_health",
     "canonical_consistency_audit",
     "canonical_runtime_event_contract",
 }
 
 
+def _source_parts(source: str) -> List[str]:
+    return [
+        part.strip().casefold()
+        for chunk in str(source or "").replace("+", ",").split(",")
+        for part in [chunk.strip()]
+        if part
+    ]
+
+
 def _is_aegis_authored(source: str) -> bool:
-    clean = str(source or "").strip().casefold()
-    if not clean:
+    parts = _source_parts(source)
+    if not parts:
         return False
-    if "," in clean:
-        return True
-    return clean in AEGIS_AUTHORED_FIELDS or any(clean.startswith(prefix) for prefix in AEGIS_AUTHORED_PREFIXES)
+    return all(part in AEGIS_AUTHORED_FIELDS or any(part.startswith(prefix) for prefix in AEGIS_AUTHORED_PREFIXES) for part in parts)
 
 
 def _was_emitted(state: Dict[str, Any], source: str) -> bool:
     if _is_aegis_authored(source):
         return False
     emitted = _emitted_fields(state)
-    clean = str(source or "").strip().casefold()
-    return clean in emitted
+    parts = _source_parts(source)
+    return bool(parts) and all(part in emitted for part in parts)
 
 
 def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
@@ -422,17 +431,22 @@ def _persona_value_audit_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     final_decision = str(state.get("aegis_final_decision") or _safe_dict(state.get("final_arbitration")).get("aegis_final_decision") or "").upper()
     route = str(state.get("effective_release_route") or "").upper()
     control_status = str(state.get("control_status") or "").upper()
+    hitl_required = bool(state.get("hitl_required") or final_decision == "HITL")
     for persona, metrics in _persona_rows(state).items():
         for row in metrics:
             source = str(row.get("Source Variable") or "")
             value = row.get("Live Value")
             emitted = _was_emitted(state, source)
+            aegis_authored = _is_aegis_authored(source)
             issue = "PASS"
             guidance = "Value source is clear."
-            if value in (None, "", "-"):
+            if source == "hitl_reasons" and not hitl_required and value in (None, "", "-", [], {}):
+                issue = "NOT_REQUIRED"
+                guidance = "HITL is not required for this run, so HITL reasons are not applicable."
+            elif value in (None, "", "-"):
                 issue = "MISSING"
                 guidance = f"Required persona value is not available from source: {source}"
-            elif _is_aegis_authored(source) and emitted:
+            elif aegis_authored and emitted:
                 issue = "SOURCE_ERROR"
                 guidance = "AEGIS-authored value was incorrectly marked as app-emitted."
             elif "Release route" in str(row.get("Metric")) and final_decision == "REJECT" and "RELEASE" in str(value).upper():
@@ -450,7 +464,7 @@ def _persona_value_audit_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "Displayed Value": value,
                 "Source Variable": source,
                 "App Emitted": "YES" if emitted else "NO",
-                "AEGIS Calculated": "YES" if _is_aegis_authored(source) or (value not in (None, "", "-") and not emitted) else "NO",
+                "AEGIS Calculated": "YES" if aegis_authored or (value not in (None, "", "-") and not emitted and issue != "NOT_REQUIRED") else "NO",
                 "Audit Status": issue,
                 "Guidance": guidance,
             })
