@@ -43,6 +43,25 @@ def _metric_value(value: Any) -> str:
     return str(value)
 
 
+def _nested_value(state: Dict[str, Any], source: str) -> Any:
+    value: Any = state
+    for part in source.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _emitted_fields(state: Dict[str, Any]) -> set:
+    return {str(item).casefold() for item in _safe_list(state.get("emitted_canonical_fields"))}
+
+
+def _was_emitted(state: Dict[str, Any], source: str) -> bool:
+    emitted = _emitted_fields(state)
+    parts = [part.casefold() for part in source.split(".")]
+    return source.casefold() in emitted or any(part in emitted for part in parts)
+
+
 def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
     st.subheader(title)
     if not rows:
@@ -71,22 +90,36 @@ def _decision_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     display = _safe_dict(state.get("canonical_display"))
     release = _safe_dict(_safe_dict(state.get("canonical_control_tower_measurements")).get("release_assessment"))
     health = _safe_dict(state.get("customer_health"))
-    return [
-        {"Decision Object": "Final Recommendation", "Value": state.get("final_recommendation") or display.get("final_recommendation") or display.get("recommendation"), "Authority": "AEGIS derived"},
-        {"Decision Object": "Risk Level", "Value": state.get("risk_level") or display.get("risk_level"), "Authority": "AEGIS derived"},
-        {"Decision Object": "Control Status", "Value": state.get("control_status") or display.get("control_status"), "Authority": "AEGIS derived"},
-        {"Decision Object": "HITL Required", "Value": "YES" if state.get("hitl_required") else "NO", "Authority": "AEGIS derived"},
-        {"Decision Object": "Release Route", "Value": release.get("release_route"), "Authority": "AEGIS release assessment"},
-        {"Decision Object": "Trust Score", "Value": state.get("trust_score") or display.get("trust_score"), "Authority": _source_label(state, "trust_score")},
-        {"Decision Object": "Confidence", "Value": state.get("confidence") or display.get("confidence"), "Authority": _source_label(state, "confidence")},
-        {"Decision Object": "Relationship Score", "Value": health.get("relationship_score"), "Authority": "AEGIS derived from trust/confidence"},
-        {"Decision Object": "Overall Health", "Value": health.get("health_score"), "Authority": "AEGIS derived"},
+    rows = [
+        ("Final Recommendation", state.get("final_recommendation") or display.get("final_recommendation") or display.get("recommendation"), "final_recommendation"),
+        ("Risk Level", state.get("risk_level") or display.get("risk_level"), "risk_level"),
+        ("Control Status", state.get("control_status") or display.get("control_status"), "control_status"),
+        ("HITL Required", "YES" if state.get("hitl_required") else "NO", "hitl_required"),
+        ("Release Route", release.get("release_route"), "canonical_control_tower_measurements.release_assessment.release_route"),
+        ("Trust Score", state.get("trust_score") or display.get("trust_score"), "trust_score"),
+        ("Confidence", state.get("confidence") or display.get("confidence"), "confidence"),
+        ("Relationship Score", health.get("relationship_score"), "customer_health.relationship_score"),
+        ("Overall Health", health.get("health_score"), "customer_health.health_score"),
     ]
+    return [_variable_row(state, "Decision Object", label, value, source) for label, value, source in rows]
 
 
 def _source_label(state: Dict[str, Any], field: str) -> str:
-    emitted = {str(item).casefold() for item in _safe_list(state.get("emitted_canonical_fields"))}
-    return "App emitted, AEGIS normalized" if field.casefold() in emitted else "AEGIS derived"
+    return "App emitted, AEGIS normalized" if _was_emitted(state, field) else "AEGIS calculated"
+
+
+def _variable_row(state: Dict[str, Any], label_col: str, label: str, value: Any, source: str) -> Dict[str, Any]:
+    emitted = _was_emitted(state, source)
+    has_value = value not in (None, "", "-", [], {})
+    return {
+        label_col: label,
+        "Variable Name": source,
+        "Value": _metric_value(value),
+        "Emitted by Onboarded App": "YES" if emitted else "NO",
+        "AEGIS System Calculated": "NO" if emitted else "YES" if has_value else "NO",
+        "Status": "APP EMITTED" if emitted else "AEGIS CALCULATED" if has_value else "MISSING",
+        "Guidance": "Received from onboarded app." if emitted else "Not emitted by Onboarded App; AEGIS calculated it." if has_value else f"Required variable not emitted from Onboarded App: {source}",
+    }
 
 
 def _persona_rows(state: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
@@ -141,16 +174,41 @@ def _persona_metric(metric: str, value: Any, meaning: str, source: str) -> Dict[
 
 
 def _missing_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    required = ["runtime_id", "app_id", "agent_id", "agent_name", "event_type", "status", "timestamp"]
+    required = [
+        ("Runtime ID", "runtime_id"),
+        ("App ID", "app_id"),
+        ("Agent ID", "agent_id"),
+        ("Agent Name", "agent_name"),
+        ("Event Type", "event_type"),
+        ("Status", "status"),
+        ("Timestamp", "timestamp"),
+        ("Final Recommendation", "final_recommendation"),
+        ("Recommendation", "recommendation"),
+        ("Risk Level", "risk_level"),
+        ("Trust Score", "trust_score"),
+        ("Confidence", "confidence"),
+        ("Control Status", "control_status"),
+        ("Error Code", "error_code"),
+        ("HITL Required", "hitl_required"),
+        ("HITL Reasons", "hitl_reasons"),
+        ("Release Route", "canonical_control_tower_measurements.release_assessment.release_route"),
+        ("Relationship Score", "customer_health.relationship_score"),
+        ("Engagement Score", "customer_health.engagement_score"),
+        ("Portfolio Score", "customer_health.portfolio_score"),
+        ("Overall Health", "customer_health.health_score"),
+        ("Evidence Count", "evidence_count"),
+        ("Estimated Cost USD", "estimated_cost_usd"),
+    ]
     events = _safe_list(_safe_dict(state.get("canonical_runtime_event_contract")).get("events"))
+    display = _safe_dict(state.get("canonical_display"))
     rows = []
-    for field in required:
-        observed = any(isinstance(event, dict) and event.get(field) not in (None, "", "-") for event in events)
-        rows.append({
-            "Required Envelope Field": field,
-            "Status": "PASS" if observed else "MISSING",
-            "Guidance": "Observed in JSONL event." if observed else f"Required variable not emitted from Onboarded App: {field}",
-        })
+    for label, source in required:
+        value = _nested_value(state, source)
+        if value in (None, "", "-", [], {}) and "." not in source:
+            value = display.get(source)
+        if source in {"agent_id", "agent_name", "event_type", "status", "timestamp"}:
+            value = value or next((event.get(source) for event in events if isinstance(event, dict) and event.get(source) not in (None, "", "-")), None)
+        rows.append(_variable_row(state, "Control Tower Variable", label, value, source))
     return rows
 
 
