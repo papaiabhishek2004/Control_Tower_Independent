@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from services1.agentic_app_adapters import JSONL_RUNTIME_LOG_APP_ID, execute_onboarded_agentic_app
+from services1.runtime_intelligence_ui_loader import load_runtime_intelligence_ui
 
 
 st.set_page_config(page_title="AEGIS Persona Decision Tower", page_icon="", layout="wide")
@@ -153,6 +154,11 @@ def _missing_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
+@st.cache_resource
+def _runtime_ui():
+    return load_runtime_intelligence_ui()
+
+
 st.title("AEGIS Persona Decision Tower")
 st.caption("Persona-specific view plus AEGIS final decision for onboarded agentic applications.")
 
@@ -201,13 +207,16 @@ with tabs[0]:
     reasons = _safe_list(state.get("hitl_reasons"))
     if reasons:
         _render_table("HITL Reasons", [{"Reason": str(reason)} for reason in reasons])
+    ui = _runtime_ui()
+    with st.container(border=True):
+        ui.render_decision_policy_path(state)
+    with st.container(border=True):
+        ui.render_recommendation(state)
+    with st.container(border=True):
+        ui.render_governance(state)
 
 with tabs[1]:
-    persona_map = _persona_rows(state)
-    persona_tabs = st.tabs(list(persona_map.keys()))
-    for tab, (persona, rows) in zip(persona_tabs, persona_map.items()):
-        with tab:
-            _render_table(f"{persona} View", rows)
+    _runtime_ui().render_persona_operating_model(state)
 
 with tabs[2]:
     _render_table("Required Event Envelope", _missing_rows(state))
