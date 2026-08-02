@@ -618,8 +618,9 @@ def _cache_layer_rows_for_report(state: Dict[str, Any]) -> list[Dict[str, Any]]:
 def _control_pillar_rows_for_report(state: Dict[str, Any]) -> list[Dict[str, Any]]:
     trust = _numeric_for_report(state.get("trust_score"))
     confidence = _numeric_for_report(state.get("confidence"))
-    groundedness = _numeric_for_report(state.get("groundedness_score"), 100 if trust else 0)
-    hallucination_risk = str(state.get("hallucination_risk") or nested_get(state, "hallucination_results", "risk_level") or "LOW").upper()
+    groundedness_raw = state.get("groundedness_score")
+    groundedness = _numeric_for_report(groundedness_raw)
+    hallucination_risk = str(state.get("hallucination_risk") or nested_get(state, "hallucination_results", "risk_level") or "-").upper()
     recommendation = str(state.get("recommendation") or nested_get(state, "recommendation_package", "recommendation") or "-").upper()
     compliance = state.get("compliance", {}) if isinstance(state.get("compliance"), dict) else {}
     compliance_status = str(compliance.get("compliance_status") or compliance.get("status") or "-").upper()
@@ -632,10 +633,38 @@ def _control_pillar_rows_for_report(state: Dict[str, Any]) -> list[Dict[str, Any
     artifact_export = state.get("artifact_export", {}) if isinstance(state.get("artifact_export"), dict) else {}
     tests_passed = bool(nested_get(state, "artifact_export", "test_results", "passed"))
     ledger_status = str(nested_get(state, "artifact_export", "audit_ledger", "status") or "-").upper()
-    trust_score = round(trust * 0.40 + confidence * 0.25 + groundedness * 0.25 + (100 if hallucination_risk == "LOW" else 65) * 0.10, 1)
+    trustworthy_components = [(trust, 0.40), (confidence, 0.25)]
+    if str(groundedness_raw or "").strip() not in {"", "-", "None", "none", "N/A", "n/a"}:
+        trustworthy_components.append((groundedness, 0.25))
+    if hallucination_risk not in {"", "-", "UNKNOWN", "N/A", "NONE", "NULL"}:
+        trustworthy_components.append(((100 if hallucination_risk == "LOW" else 65), 0.10))
+    trust_weight = sum(weight for _, weight in trustworthy_components) or 1
+    trust_score = round(sum(score * weight for score, weight in trustworthy_components) / trust_weight, 1)
+    trustworthy_formula_parts = [f"Trust {trust:.1f} x 40%", f"Confidence {confidence:.1f} x 25%"]
+    missing_trustworthy = []
+    if str(groundedness_raw or "").strip() not in {"", "-", "None", "none", "N/A", "n/a"}:
+        trustworthy_formula_parts.append(f"Grounding {groundedness:.1f} x 25%")
+    else:
+        missing_trustworthy.append("groundedness")
+    if hallucination_risk not in {"", "-", "UNKNOWN", "N/A", "NONE", "NULL"}:
+        trustworthy_formula_parts.append(f"Hallucination control {(100 if hallucination_risk == 'LOW' else 65):.1f} x 10%")
+    else:
+        missing_trustworthy.append("hallucination_risk")
+    trustworthy_signal = (
+        f"Trust {trust:.1f}; Confidence {confidence:.1f}; Hallucination {hallucination_risk}. "
+        f"Formula: ({' + '.join(trustworthy_formula_parts)}) / {trust_weight:.2f}. "
+        f"Missing not scored: {', '.join(missing_trustworthy) if missing_trustworthy else 'none'}."
+    )
     governance_score = round((100 if compliance_status == "COMPLIANT" else 65) * 0.45 + (100 if recommendation == "APPROVE" else 70) * 0.35 + (75 if state.get("hitl_required") else 100) * 0.20, 1)
     measurable_score = round(sum([100 if trace else 0, 100 if evidence_count else 0, 100 if state.get("execution_timeline") else 0, 100]) / 4, 1)
-    scale_score = round((100 if str(cache_lookup.get("status", "")).upper() == "HIT" else 80 if str(cache_lookup.get("status", "")).upper() == "STORED" else 55) * 0.65 + (100 if cache_lookup.get("entries", 0) else 50) * 0.35, 1)
+    cache_status = str(cache_lookup.get("status", "")).upper()
+    cache_component = 100 if cache_status == "HIT" else 80 if cache_status == "STORED" else 55
+    cache_entries_component = 100 if cache_lookup.get("entries", 0) else 50
+    scale_score = round(cache_component * 0.65 + cache_entries_component * 0.35, 1)
+    scalable_signal = (
+        f"Runtime cache {cache_lookup.get('status', '-')}; entries {cache_lookup.get('entries', 0)}. "
+        f"Formula: Cache {cache_component} x 65% + Entries {cache_entries_component} x 35%."
+    )
     resilience_score = round(sum([
         100 if runtime_status == "COMPLETED" else 60,
         100 if artifact_export.get("status") else 65,
@@ -643,20 +672,26 @@ def _control_pillar_rows_for_report(state: Dict[str, Any]) -> list[Dict[str, Any
         100 if not runtime_errors else 45,
         100 if state.get("hitl_required") or compliance_status in {"COMPLIANT", "REVIEW_REQUIRED"} else 75,
     ]) / 5, 1)
-    audit_score = round(sum([
+    audit_components = [
         100 if artifact_export.get("status") else 65,
         100 if ledger_status == "SAVED" else 70,
         100 if tests_passed else 75,
         100 if evidence_count else 60,
         100 if trace else 60,
-    ]) / 5, 1)
+    ]
+    audit_score = round(sum(audit_components) / len(audit_components), 1)
+    auditable_signal = (
+        f"Artifacts {artifact_export.get('status', '-')}; ledger {ledger_status}; tests {'PASS' if tests_passed else 'REVIEW'}. "
+        f"Formula: Artifact {audit_components[0]}, Ledger {audit_components[1]}, Tests {audit_components[2]}, "
+        f"Evidence {audit_components[3]}, Agents {audit_components[4]} average."
+    )
     return [
-        {"pillar": "Trustworthy AI", "score": trust_score, "signal": f"Trust {trust:.1f}; Confidence {confidence:.1f}; Hallucination {hallucination_risk}"},
+        {"pillar": "Trustworthy AI", "score": trust_score, "signal": trustworthy_signal},
         {"pillar": "Governable AI", "score": governance_score, "signal": f"Compliance {compliance_status}; Recommendation {recommendation}; HITL {'YES' if state.get('hitl_required') else 'NO'}"},
         {"pillar": "Measurable AI", "score": measurable_score, "signal": f"{len(trace)} agents; {evidence_count} evidence rows; cost USD {token.get('estimated_cost_usd', '-')}"},
-        {"pillar": "Scalable AI", "score": scale_score, "signal": f"Runtime cache {cache_lookup.get('status', '-')}; entries {cache_lookup.get('entries', 0)}"},
+        {"pillar": "Scalable AI", "score": scale_score, "signal": scalable_signal},
         {"pillar": "Resilient AI", "score": resilience_score, "signal": f"Status {runtime_status}; errors {len(runtime_errors)}; audit {artifact_export.get('status', '-')}"},
-        {"pillar": "Auditable AI", "score": audit_score, "signal": f"Artifacts {artifact_export.get('status', '-')}; ledger {ledger_status}; tests {'PASS' if tests_passed else 'REVIEW'}"},
+        {"pillar": "Auditable AI", "score": audit_score, "signal": auditable_signal},
     ]
 
 

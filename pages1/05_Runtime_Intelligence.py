@@ -6369,12 +6369,33 @@ def _six_pillar_visual_model(result):
     artifact_status = _safe_get(result, "artifact_export", {}).get("status")
     ledger_status = _safe_get(result, "artifact_export", {}).get("audit_ledger", {}).get("status")
 
-    trust_score = round(
-        _numeric_score(quality.get("trust_score"), 0) * 0.40
-        + _numeric_score(quality.get("confidence"), 0) * 0.25
-        + _numeric_score(quality.get("groundedness"), 0) * 0.25
-        + (100 if str(quality.get("hallucination_risk", "")).upper() == "LOW" else 65) * 0.10,
-        1,
+    trustworthy_components = [
+        (_numeric_score(quality.get("trust_score"), 0), 0.40),
+        (_numeric_score(quality.get("confidence"), 0), 0.25),
+    ]
+    if not _is_unknown_value(quality.get("groundedness")):
+        trustworthy_components.append((_numeric_score(quality.get("groundedness"), 0), 0.25))
+    hallucination_label = str(quality.get("hallucination_risk", "")).upper()
+    if hallucination_label not in {"", "-", "UNKNOWN", "N/A", "NONE", "NULL"}:
+        trustworthy_components.append(((100 if hallucination_label == "LOW" else 65), 0.10))
+    trust_weight = sum(weight for _, weight in trustworthy_components) or 1
+    trust_score = round(sum(score * weight for score, weight in trustworthy_components) / trust_weight, 1)
+    trustworthy_formula_parts = [
+        f"Trust {quality.get('trust_score', 0):.1f} x 40%",
+        f"Confidence {quality.get('confidence', 0):.1f} x 25%",
+    ]
+    missing_trustworthy = []
+    if not _is_unknown_value(quality.get("groundedness")):
+        trustworthy_formula_parts.append(f"Grounding {_numeric_score(quality.get('groundedness'), 0):.1f} x 25%")
+    else:
+        missing_trustworthy.append("groundedness")
+    if hallucination_label not in {"", "-", "UNKNOWN", "N/A", "NONE", "NULL"}:
+        trustworthy_formula_parts.append(f"Hallucination control {(100 if hallucination_label == 'LOW' else 65):.1f} x 10%")
+    else:
+        missing_trustworthy.append("hallucination_risk")
+    trustworthy_calculation = (
+        f"Formula: ({' + '.join(trustworthy_formula_parts)}) / {trust_weight:.2f}. "
+        f"Missing not scored: {', '.join(missing_trustworthy) if missing_trustworthy else 'none'}."
     )
     governance_score = round(
         (100 if compliance_status == "COMPLIANT" else 65) * 0.35
@@ -6390,12 +6411,21 @@ def _six_pillar_visual_model(result):
         100 if _numeric_score(token.get("estimated_cost_usd"), 0) >= 0 else 0,
     ]
     measurement_score = round(sum(measured_components) / len(measured_components), 1)
+    cache_status = str(cache.get("status", "")).upper()
+    cache_component = 100 if cache_status == "HIT" else 80 if cache_status == "STORED" else 55
+    cache_entries_component = 100 if cache.get("entries", 0) else 50
+    vector_component = 100 if result.get("vector_index_cdc") else 70
+    artifact_component = 100 if artifact_status else 65
     scale_score = round(
-        (100 if str(cache.get("status", "")).upper() == "HIT" else 80 if str(cache.get("status", "")).upper() == "STORED" else 55) * 0.45
-        + (100 if cache.get("entries", 0) else 50) * 0.20
-        + (100 if result.get("vector_index_cdc") else 70) * 0.20
-        + (100 if artifact_status else 65) * 0.15,
+        cache_component * 0.45
+        + cache_entries_component * 0.20
+        + vector_component * 0.20
+        + artifact_component * 0.15,
         1,
+    )
+    scalable_calculation = (
+        f"Formula: Cache {cache_component} x 45% + Entries {cache_entries_component} x 20% + "
+        f"Vector/CDC {vector_component} x 20% + Artifact {artifact_component} x 15%."
     )
     resilience_components = [
         100 if runtime_status == "COMPLETED" else 60,
@@ -6413,13 +6443,21 @@ def _six_pillar_visual_model(result):
         100 if agent_counts.get("executed", 0) > 0 else 60,
     ]
     audit_score = round(sum(audit_components) / len(audit_components), 1)
+    auditable_calculation = (
+        f"Formula: Artifact {audit_components[0]}, Ledger {audit_components[1]}, "
+        f"Consistency {audit_components[2]}, Evidence {audit_components[3]}, Agents {audit_components[4]} average. "
+        f"Mismatch source: canonical_consistency_audit has {len(consistency_mismatches)} mismatch row(s)."
+    )
 
     return [
         {
             "Pillar": "Trustworthy AI",
             "Short Label": "Trustworthy",
             "Score": trust_score,
-            "Signal": f"Trust {quality.get('trust_score', 0):.1f}; Confidence {quality.get('confidence', 0):.1f}; Hallucination {quality.get('hallucination_risk', '-')}",
+            "Signal": (
+                f"Trust {quality.get('trust_score', 0):.1f}; Confidence {quality.get('confidence', 0):.1f}; "
+                f"Hallucination {quality.get('hallucination_risk', '-')}. {trustworthy_calculation}"
+            ),
             "State": "pass" if trust_score >= 80 else "review",
             "Tabs": "Evidence, Retrieval, OWASP AI, LLM Judge",
         },
@@ -6443,7 +6481,7 @@ def _six_pillar_visual_model(result):
             "Pillar": "Scalable AI",
             "Short Label": "Scalable",
             "Score": scale_score,
-            "Signal": f"Cache {cache.get('status', '-')}; entries {cache.get('entries', 0)}; onboarding contract",
+            "Signal": f"Cache {cache.get('status', '-')}; entries {cache.get('entries', 0)}; onboarding contract. {scalable_calculation}",
             "State": "pass" if scale_score >= 80 else "review",
             "Tabs": "Cache, Asset Registry, Onboarding",
         },
@@ -6459,7 +6497,7 @@ def _six_pillar_visual_model(result):
             "Pillar": "Auditable AI",
             "Short Label": "Auditable",
             "Score": audit_score,
-            "Signal": f"Artifacts {artifact_status or '-'}; ledger {ledger_status or '-'}; mismatches {len(consistency_mismatches)}",
+            "Signal": f"Artifacts {artifact_status or '-'}; ledger {ledger_status or '-'}; mismatches {len(consistency_mismatches)}. {auditable_calculation}",
             "State": "pass" if audit_score >= 80 else "review",
             "Tabs": "Auditability, Audit Package, Evidence",
         },
