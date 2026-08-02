@@ -9,6 +9,7 @@ Run:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 import time
@@ -88,11 +89,30 @@ def _load_runtime(log_path: str, app_id: str, runtime_label: str, objective: str
     )
 
 
-def _latest_jsonl_file(folder_path: str) -> Path | None:
+def _jsonl_app_ids(path: Path) -> set:
+    app_ids = set()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if not text:
+                    continue
+                event = json.loads(text)
+                if isinstance(event, dict) and event.get("app_id"):
+                    app_ids.add(str(event.get("app_id")).casefold())
+    except (OSError, json.JSONDecodeError):
+        return set()
+    return app_ids
+
+
+def _latest_jsonl_file(folder_path: str, app_id: str = "") -> Path | None:
     folder = Path(folder_path)
     if not folder.exists() or not folder.is_dir():
         return None
     files = [path for path in folder.glob("*.jsonl") if path.is_file()]
+    clean_app_id = str(app_id or "").strip().casefold()
+    if clean_app_id:
+        files = [path for path in files if clean_app_id in _jsonl_app_ids(path)]
     if not files:
         return None
     return max(files, key=lambda path: path.stat().st_mtime)
@@ -104,9 +124,9 @@ def _file_signature(path: Path) -> str:
 
 
 def _load_watched_runtime(folder_path: str, app_id: str, runtime_label: str, objective: str) -> str:
-    latest = _latest_jsonl_file(folder_path)
+    latest = _latest_jsonl_file(folder_path, app_id)
     if latest is None:
-        return "No .jsonl runtime log found in watched folder."
+        return f"No .jsonl runtime log found for app_id={app_id} in watched folder."
     signature = _file_signature(latest)
     if st.session_state.get("watched_runtime_signature") == signature:
         return f"Watching {latest.name}; no new changes."

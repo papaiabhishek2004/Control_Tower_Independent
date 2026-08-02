@@ -185,6 +185,10 @@ AEGIS scans the watched folder for the newest `.jsonl` file. When an onboarded
 app creates or appends to a JSONL file, AEGIS reloads that runtime and updates
 the decision/persona view.
 
+If multiple JSONL files are present in the watched folder, AEGIS matches files
+by the `app_id` emitted inside the JSONL events and loads the newest matching
+file for the selected registered app.
+
 Recommended app log path pattern:
 
 ```text
