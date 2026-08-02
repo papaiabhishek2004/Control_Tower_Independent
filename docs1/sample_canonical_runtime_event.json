@@ -1,61 +1,277 @@
 {
-  "runtime_id": "RUN-001",
-  "app_id": "CUSTOMER_360_AGENT",
-  "agent_id": "retriever_01",
-  "agent_name": "Retriever Agent",
-  "event_type": "AGENT_COMPLETED",
-  "status": "COMPLETED",
-  "timestamp": "2026-08-02T18:55:00Z",
-  "agent_type": "RETRIEVAL_AGENT",
-  "phase": "DURING_RUNTIME",
-  "lifecycle_phase": "DURING_RUNTIME",
-  "execution_order": 2,
-  "stage_id": "evidence_runtime",
-  "started_at": "2026-08-02T18:54:58Z",
-  "completed_at": "2026-08-02T18:55:00Z",
-  "duration_ms": 2000,
-  "retry_count": 0,
-  "max_retries": 2,
-  "retry_reason": "",
-  "previous_agents": [
-    "planner_01"
+  "description": "AEGIS canonical runtime sample. Write each object in events[] as one JSONL line when integrating an onboarded app.",
+  "required_event_envelope_fields": [
+    "runtime_id",
+    "app_id",
+    "agent_id",
+    "agent_name",
+    "event_type",
+    "status",
+    "timestamp"
   ],
-  "next_agents": [
-    "decision_01"
+  "canonical_parameters": [
+    "agent_id",
+    "agent_name",
+    "agent_type",
+    "phase",
+    "execution_order",
+    "stage_id",
+    "status",
+    "started_at",
+    "completed_at",
+    "duration_ms",
+    "retry_count",
+    "max_retries",
+    "retry_reason",
+    "previous_agents",
+    "next_agents",
+    "provider",
+    "model",
+    "model_version",
+    "prompt_hash",
+    "prompt_template_id",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "retrieval_method",
+    "retrieved_chunks",
+    "reranked_chunks",
+    "control_id",
+    "control_status",
+    "findings",
+    "recommendation",
+    "risk_level",
+    "confidence",
+    "rationale",
+    "error_code",
+    "error_message",
+    "fallback_used"
   ],
-  "provider": "OpenAI",
-  "model": "gpt-4.1",
-  "model_version": "2026-xx",
-  "prompt_hash": "sha256:ab12cd34",
-  "prompt_template_id": "customer-risk-review-v1",
-  "input_tokens": 147,
-  "output_tokens": 440,
-  "total_tokens": 587,
-  "retrieval_method": "Hybrid BM25 + Vector",
-  "retrieved_chunks": [
+  "unique_field_note": "7 envelope fields + 36 canonical parameters = 43 listed fields. agent_id, agent_name, and status overlap, so there are 40 unique emitted fields.",
+  "events": [
     {
-      "chunk_id": "TX001",
-      "rank": 1,
-      "score": 0.87
-    }
-  ],
-  "reranked_chunks": [
+      "runtime_id": "RUN-001",
+      "app_id": "CUSTOMER_360_AGENT",
+      "agent_id": "runtime_controller",
+      "agent_name": "Runtime Controller",
+      "event_type": "RUNTIME_STARTED",
+      "status": "RUNNING",
+      "timestamp": "2026-08-02T18:54:00Z",
+      "agent_type": "ORCHESTRATOR",
+      "phase": "BEFORE_STARTING",
+      "execution_order": 1,
+      "stage_id": "runtime_startup",
+      "started_at": "2026-08-02T18:54:00Z",
+      "completed_at": "",
+      "duration_ms": 0,
+      "retry_count": 0,
+      "max_retries": 2,
+      "retry_reason": "",
+      "previous_agents": [],
+      "next_agents": [
+        "planner_01"
+      ],
+      "provider": "OpenAI",
+      "model": "gpt-4.1",
+      "model_version": "2026-xx",
+      "prompt_hash": "sha256:start001",
+      "prompt_template_id": "runtime-start-v1",
+      "input_tokens": 25,
+      "output_tokens": 0,
+      "total_tokens": 25,
+      "retrieval_method": "NONE",
+      "retrieved_chunks": [],
+      "reranked_chunks": [],
+      "control_id": "AEGIS-RUNTIME-START",
+      "control_status": "PASS",
+      "findings": [
+        "Runtime accepted by onboarded app."
+      ],
+      "recommendation": "PENDING",
+      "risk_level": "REVIEW",
+      "confidence": 0,
+      "rationale": "Runtime has started; decision is not yet available.",
+      "error_code": "NONE",
+      "error_message": "",
+      "fallback_used": false
+    },
     {
-      "chunk_id": "TX001",
-      "rank": 1,
-      "score": 0.92
+      "runtime_id": "RUN-001",
+      "app_id": "CUSTOMER_360_AGENT",
+      "agent_id": "retriever_01",
+      "agent_name": "Retriever Agent",
+      "event_type": "AGENT_COMPLETED",
+      "status": "COMPLETED",
+      "timestamp": "2026-08-02T18:55:00Z",
+      "agent_type": "RETRIEVAL_AGENT",
+      "phase": "DURING_RUNTIME",
+      "execution_order": 2,
+      "stage_id": "evidence_runtime",
+      "started_at": "2026-08-02T18:54:58Z",
+      "completed_at": "2026-08-02T18:55:00Z",
+      "duration_ms": 2000,
+      "retry_count": 0,
+      "max_retries": 2,
+      "retry_reason": "",
+      "previous_agents": [
+        "runtime_controller"
+      ],
+      "next_agents": [
+        "decision_01"
+      ],
+      "provider": "OpenAI",
+      "model": "gpt-4.1",
+      "model_version": "2026-xx",
+      "prompt_hash": "sha256:retrieve001",
+      "prompt_template_id": "customer-risk-retrieval-v1",
+      "input_tokens": 147,
+      "output_tokens": 440,
+      "total_tokens": 587,
+      "retrieval_method": "Hybrid BM25 + Vector",
+      "retrieved_chunks": [
+        {
+          "chunk_id": "TX001",
+          "rank": 1,
+          "score": 0.87
+        }
+      ],
+      "reranked_chunks": [
+        {
+          "chunk_id": "TX001",
+          "rank": 1,
+          "score": 0.92
+        }
+      ],
+      "control_id": "OWASP-LLM02",
+      "control_status": "PASS",
+      "findings": [
+        "No prompt injection detected."
+      ],
+      "recommendation": "PENDING",
+      "risk_level": "LOW",
+      "confidence": 82,
+      "rationale": "Evidence retrieval completed successfully.",
+      "error_code": "NONE",
+      "error_message": "",
+      "fallback_used": false
+    },
+    {
+      "runtime_id": "RUN-001",
+      "app_id": "CUSTOMER_360_AGENT",
+      "agent_id": "decision_01",
+      "agent_name": "Decision Agent",
+      "event_type": "DECISION_PROPOSED",
+      "status": "COMPLETED",
+      "timestamp": "2026-08-02T18:55:08Z",
+      "agent_type": "DECISION_AGENT",
+      "phase": "BEFORE_COMPLETION",
+      "execution_order": 3,
+      "stage_id": "decision_pre_completion",
+      "started_at": "2026-08-02T18:55:01Z",
+      "completed_at": "2026-08-02T18:55:08Z",
+      "duration_ms": 7000,
+      "retry_count": 0,
+      "max_retries": 2,
+      "retry_reason": "",
+      "previous_agents": [
+        "retriever_01"
+      ],
+      "next_agents": [
+        "runtime_controller"
+      ],
+      "provider": "OpenAI",
+      "model": "gpt-4.1",
+      "model_version": "2026-xx",
+      "prompt_hash": "sha256:decision001",
+      "prompt_template_id": "customer-risk-review-v1",
+      "input_tokens": 320,
+      "output_tokens": 210,
+      "total_tokens": 530,
+      "retrieval_method": "Hybrid BM25 + Vector",
+      "retrieved_chunks": [
+        {
+          "chunk_id": "TX001",
+          "rank": 1,
+          "score": 0.87
+        }
+      ],
+      "reranked_chunks": [
+        {
+          "chunk_id": "TX001",
+          "rank": 1,
+          "score": 0.92
+        }
+      ],
+      "control_id": "AEGIS-DECISION-GATE",
+      "control_status": "PASS",
+      "findings": [
+        "Decision is supported by retrieved evidence."
+      ],
+      "recommendation": "APPROVE",
+      "risk_level": "LOW",
+      "confidence": 86,
+      "rationale": "Evidence-backed response with policy-approved route.",
+      "error_code": "NONE",
+      "error_message": "",
+      "fallback_used": false
+    },
+    {
+      "runtime_id": "RUN-001",
+      "app_id": "CUSTOMER_360_AGENT",
+      "agent_id": "runtime_controller",
+      "agent_name": "Runtime Controller",
+      "event_type": "RUNTIME_COMPLETED",
+      "status": "COMPLETED",
+      "timestamp": "2026-08-02T18:55:10Z",
+      "agent_type": "ORCHESTRATOR",
+      "phase": "AFTER_COMPLETION",
+      "execution_order": 4,
+      "stage_id": "runtime_completion",
+      "started_at": "2026-08-02T18:54:00Z",
+      "completed_at": "2026-08-02T18:55:10Z",
+      "duration_ms": 70000,
+      "retry_count": 0,
+      "max_retries": 2,
+      "retry_reason": "",
+      "previous_agents": [
+        "decision_01"
+      ],
+      "next_agents": [],
+      "provider": "OpenAI",
+      "model": "gpt-4.1",
+      "model_version": "2026-xx",
+      "prompt_hash": "sha256:complete001",
+      "prompt_template_id": "runtime-complete-v1",
+      "input_tokens": 492,
+      "output_tokens": 650,
+      "total_tokens": 1142,
+      "retrieval_method": "Hybrid BM25 + Vector",
+      "retrieved_chunks": [
+        {
+          "chunk_id": "TX001",
+          "rank": 1,
+          "score": 0.87
+        }
+      ],
+      "reranked_chunks": [
+        {
+          "chunk_id": "TX001",
+          "rank": 1,
+          "score": 0.92
+        }
+      ],
+      "control_id": "AEGIS-RUNTIME-COMPLETE",
+      "control_status": "PASS",
+      "findings": [
+        "Runtime completed and audit event emitted."
+      ],
+      "recommendation": "APPROVE",
+      "risk_level": "LOW",
+      "confidence": 86,
+      "rationale": "Final runtime event confirms successful completion.",
+      "error_code": "NONE",
+      "error_message": "",
+      "fallback_used": false
     }
-  ],
-  "control_id": "OWASP-LLM02",
-  "control_status": "PASS",
-  "findings": [
-    "No prompt injection detected"
-  ],
-  "recommendation": "APPROVE",
-  "risk_level": "LOW",
-  "confidence": 86,
-  "rationale": "Evidence-backed response with policy-approved route.",
-  "error_code": "NONE",
-  "error_message": "",
-  "fallback_used": false
+  ]
 }
