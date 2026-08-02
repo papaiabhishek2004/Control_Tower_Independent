@@ -58,6 +58,61 @@ def _metric_value(value: Any) -> str:
     return str(value)
 
 
+def _clean_model_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() == "none":
+        return "-"
+    normalized = text.replace("\\", "/")
+    if "models--" in normalized:
+        after = normalized.split("models--", 1)[1]
+        model_part = after.split("/snapshots/", 1)[0]
+        pieces = [part for part in model_part.split("--") if part]
+        if len(pieces) >= 2:
+            return f"{pieces[0]}/{'/'.join(pieces[1:])}"
+        return model_part.replace("--", "/")
+    if normalized.upper() in {"QWEN_LOCAL", "LOCAL_QWEN"}:
+        return "Qwen/Qwen2.5-0.5B-Instruct"
+    return text
+
+
+def _model_revision(value: Any) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    if "/snapshots/" in text:
+        revision = text.split("/snapshots/", 1)[1].split("/", 1)[0]
+        return revision[:12] if revision else "-"
+    clean = _clean_model_name(value)
+    if clean.startswith("Qwen/Qwen2.5-0.5B-Instruct"):
+        return "2.5-0.5B-Instruct"
+    if clean.startswith("Qwen/Qwen2.5-1.5B-Instruct"):
+        return "2.5-1.5B-Instruct"
+    if clean.startswith("Qwen/Qwen2.5-3B-Instruct"):
+        return "2.5-3B-Instruct"
+    if clean.startswith("llama-"):
+        return clean
+    return "-"
+
+
+def _display_provider(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if text in {"LOCAL", "QWEN", "QWEN_LOCAL", "LOCAL_QWEN"}:
+        return "LOCAL_QWEN"
+    if text == "GROQ":
+        return "GROQ"
+    if not text or text == "NONE":
+        return "-"
+    return text
+
+
+def _state_default_model(state: Dict[str, Any]) -> str:
+    return (
+        state.get("model_version")
+        or state.get("model")
+        or _safe_dict(state.get("runtime_telemetry")).get("model")
+        or _safe_dict(state.get("llm_telemetry")).get("model")
+        or "Qwen/Qwen2.5-0.5B-Instruct"
+    )
+
+
 def _nested_value(state: Dict[str, Any], source: str) -> Any:
     value: Any = state
     for part in source.split("."):
@@ -467,17 +522,21 @@ def _lifecycle_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _llm_judge_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     assurance = _safe_dict(state.get("llm_judge_assurance"))
+    default_model = _state_default_model(state)
     rows = []
     for row in _safe_list(assurance.get("judge_verdicts")):
         if not isinstance(row, dict):
             continue
+        raw_model = row.get("judge_model") or row.get("model") or _safe_dict(row.get("telemetry")).get("model") or default_model
         rows.append({
             "Judge": row.get("judge_name") or row.get("judge_id"),
             "Verdict": row.get("verdict"),
             "Score": row.get("score"),
             "Confidence": row.get("confidence"),
             "Engine": row.get("judge_engine") or row.get("engine"),
-            "Model": row.get("judge_model"),
+            "Provider": _display_provider(row.get("provider") or row.get("judge_engine") or row.get("engine")),
+            "Model": _clean_model_name(raw_model),
+            "Model Version / Revision": _model_revision(raw_model),
             "Rationale": row.get("rationale"),
         })
     return rows
@@ -575,15 +634,24 @@ def _llm_execution_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     verdicts = [row for row in _safe_list(assurance.get("judge_verdicts")) if isinstance(row, dict)]
     llm_judge_used = any(not row.get("fallback_used") and str(row.get("provider") or "").upper() not in {"", "AEGIS_DETERMINISTIC"} for row in verdicts)
     fallback_count = sum(1 for row in verdicts if row.get("fallback_used"))
-    providers = sorted({str(row.get("provider")) for row in verdicts if row.get("provider")})
-    models = sorted({str(row.get("model")) for row in verdicts if row.get("model")})
+    providers = sorted({_display_provider(row.get("provider") or row.get("judge_engine") or row.get("engine")) for row in verdicts if row.get("provider") or row.get("judge_engine") or row.get("engine")})
+    default_model = _state_default_model(state)
+    judge_models = [
+        row.get("judge_model") or row.get("model") or _safe_dict(row.get("telemetry")).get("model") or default_model
+        for row in verdicts
+    ]
+    models = sorted({_clean_model_name(model) for model in judge_models if _clean_model_name(model) != "-"})
+    model_revisions = sorted({_model_revision(model) for model in judge_models if _model_revision(model) != "-"})
     arbitration = _safe_dict(state.get("final_arbitration"))
+    ragas_model = ragas_llm.get("model") or default_model
+    arbitration_model = arbitration.get("llm_model") or default_model
     return [
         {
             "LLM Component": "RAGAS Evaluation",
             "Executed Successfully": "YES" if ragas_llm.get("success") else "NO",
-            "Provider": ragas_llm.get("provider", "-"),
-            "Model": ragas_llm.get("model", "-"),
+            "Provider": _display_provider(ragas_llm.get("provider", "-")),
+            "Model": _clean_model_name(ragas_model),
+            "Model Version / Revision": _model_revision(ragas_model),
             "Status": ragas.get("status", "-"),
             "Fallback Used": "NO",
             "Error / Reason": ragas_llm.get("error", "-"),
@@ -593,6 +661,7 @@ def _llm_execution_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             "Executed Successfully": "YES" if llm_judge_used else "NO",
             "Provider": ", ".join(providers) or "-",
             "Model": ", ".join(models) or "-",
+            "Model Version / Revision": ", ".join(model_revisions) or "-",
             "Status": assurance.get("final_verdict", "-"),
             "Fallback Used": "YES" if fallback_count else "NO",
             "Error / Reason": f"{fallback_count} deterministic fallback judge(s)" if fallback_count else assurance.get("final_rationale", "-"),
@@ -600,8 +669,9 @@ def _llm_execution_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         {
             "LLM Component": "Final Arbitration Judge",
             "Executed Successfully": "YES" if arbitration.get("llm_used") else "NO",
-            "Provider": arbitration.get("llm_provider", "-"),
-            "Model": arbitration.get("llm_model", "-"),
+            "Provider": _display_provider(arbitration.get("llm_provider", "-")),
+            "Model": _clean_model_name(arbitration_model),
+            "Model Version / Revision": _model_revision(arbitration_model),
             "Status": arbitration.get("aegis_final_decision", "-"),
             "Fallback Used": "NO" if arbitration.get("llm_used") else "YES",
             "Error / Reason": arbitration.get("error") or arbitration.get("rationale", "-"),
