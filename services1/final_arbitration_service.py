@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+from services1.local_secret_service import local_config_value
+
 
 LOCAL_ENV_FILE = Path(__file__).resolve().parents[1] / ".env.local"
 VALID_ACTIONS = {"ACCEPT", "REJECT", "RETRY", "HITL"}
@@ -22,22 +24,7 @@ def _safe_list(value: Any) -> List[Any]:
 
 
 def _local_env_value(key: str, default: str = "") -> str:
-    value = os.getenv(key)
-    if value:
-        return value.strip().strip('"').strip("'")
-    if not LOCAL_ENV_FILE.exists():
-        return default
-    try:
-        for raw_line in LOCAL_ENV_FILE.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            name, raw_value = line.split("=", 1)
-            if name.strip() == key:
-                return raw_value.strip().strip('"').strip("'")
-    except Exception:
-        return default
-    return default
+    return local_config_value(key, default)
 
 
 def _control_packet(state: Dict[str, Any]) -> Dict[str, Any]:

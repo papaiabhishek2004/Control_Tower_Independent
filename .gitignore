@@ -5,3 +5,4 @@ runtime_events.jsonl
 .env.local
 AEGIS_RESULTS/
 .aegis_cache/
+config/aegis_llm_secrets.local.json

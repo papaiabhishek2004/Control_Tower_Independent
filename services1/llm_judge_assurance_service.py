@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+from services1.local_secret_service import local_config_value
+
 
 SCHEMA_VERSION = "1.0"
 RUBRIC_VERSION = "AEGIS-JUDGE-RUBRIC-2026.07"
@@ -24,22 +26,7 @@ LOCAL_ENV_FILE = Path(__file__).resolve().parents[1] / ".env.local"
 
 
 def _local_env_value(key: str, default: str = "") -> str:
-    value = os.getenv(key)
-    if value:
-        return value.strip().strip('"').strip("'")
-    if not LOCAL_ENV_FILE.exists():
-        return default
-    try:
-        for raw_line in LOCAL_ENV_FILE.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            name, raw_value = line.split("=", 1)
-            if name.strip() == key:
-                return raw_value.strip().strip('"').strip("'")
-    except Exception:
-        return default
-    return default
+    return local_config_value(key, default)
 
 JUDGE_RUBRIC_REGISTRY: List[Dict[str, Any]] = [
     {
