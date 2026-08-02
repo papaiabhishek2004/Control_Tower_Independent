@@ -486,7 +486,7 @@ def _invoke_qwen_judge(
 
 
 def _judge_provider_order() -> List[str]:
-    raw = _local_env_value("AEGIS_LLM_JUDGE_PROVIDER_ORDER", "GROQ,QWEN,DETERMINISTIC")
+    raw = _local_env_value("AEGIS_LLM_JUDGE_PROVIDER_ORDER", "LOCAL,GROQ,DETERMINISTIC")
     order = [item.strip().upper() for item in raw.split(",") if item.strip()]
     cleaned = []
     for item in order:
@@ -501,7 +501,7 @@ def _attempt_llm_judge(judge: Dict[str, Any], runtime_state: Dict[str, Any], use
         return {"llm_status": "DISABLED", "fallback_used": True}
     if str(_local_env_value("AEGIS_DISABLE_LLM_JUDGE", "")).lower() in {"1", "true", "yes"}:
         return {"llm_status": "ENV_DISABLED", "fallback_used": True}
-    judge_mode = str(_local_env_value("AEGIS_LLM_JUDGE_MODE", "final")).strip().lower()
+    judge_mode = str(_local_env_value("AEGIS_LLM_JUDGE_MODE", "full")).strip().lower()
     judge_id = str(judge.get("judge_id") or "").strip().lower()
     if judge_mode not in {"full", "all"} and judge_id != "final_arbitration":
         return {"llm_status": "SPECIALIST_DETERMINISTIC", "fallback_used": True}
@@ -749,7 +749,7 @@ def run_llm_judge_assurance(runtime_state: Dict[str, Any], use_llm: bool = True)
         "created_at": _now(),
         "judge_mode": "LLM_FIRST_WITH_DETERMINISTIC_FALLBACK",
         "llm_enabled": bool(use_llm and str(os.getenv("AEGIS_DISABLE_LLM_JUDGE", "")).lower() not in {"1", "true", "yes"}),
-        "llm_judge_execution_mode": str(os.getenv("AEGIS_LLM_JUDGE_MODE", "final")).strip().lower(),
+        "llm_judge_execution_mode": _local_env_value("AEGIS_LLM_JUDGE_MODE", "full").strip().lower(),
         "final_verdict": final_verdict,
         "final_rationale": rationale,
         "hitl_required": bool(runtime_state.get("hitl_required") or final_verdict != "PASS"),

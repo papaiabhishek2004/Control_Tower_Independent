@@ -62,44 +62,71 @@ def _local_env_value(key: str, default: str = "") -> str:
     return default
 
 
-def _invoke_ragas_llm(prompt: str, state: Dict[str, Any]) -> Dict[str, Any]:
+def _ragas_provider_order() -> list:
+    raw = _local_env_value("AEGIS_RAGAS_PROVIDER_ORDER", _local_env_value("AEGIS_LLM_PROVIDER_ORDER", "LOCAL,GROQ,DETERMINISTIC"))
+    order = []
+    for item in [part.strip().upper() for part in raw.split(",") if part.strip()]:
+        normalized = "LOCAL" if item in {"QWEN", "QWEN_LOCAL", "LOCAL_QWEN"} else item
+        if normalized in {"GROQ", "LOCAL", "DETERMINISTIC"} and normalized not in order:
+            order.append(normalized)
+    return order or ["LOCAL", "GROQ", "DETERMINISTIC"]
+
+
+def _fallback_ragas_llm(provider: str, model: str, error: str, summary: str) -> Dict[str, Any]:
+    return {
+        "success": False,
+        "provider": provider,
+        "model": model,
+        "latency_ms": 0,
+        "parsed_output": {
+            "executive_summary": summary,
+            "quality_assessment": "LLM_UNAVAILABLE",
+            "strengths": [],
+            "weaknesses": [error],
+            "recommended_actions": ["Check Groq/local Qwen configuration and rerun AEGIS."],
+            "confidence": 0,
+        },
+        "error": error,
+    }
+
+
+def _invoke_local_ragas_llm(prompt: str, state: Dict[str, Any]) -> Dict[str, Any]:
+    model = _local_env_value("AEGIS_LOCAL_RAGAS_MODEL", "QWEN_LOCAL")
+    try:
+        from services1.llm_runtime import invoke_reasoning_agent  # type: ignore
+        response = invoke_reasoning_agent(
+            agent_name="RAGAS Evaluation Agent",
+            system_prompt="Enterprise RAG Quality Evaluator. Return only valid JSON.",
+            user_prompt=prompt,
+            temperature=0.0,
+            max_tokens=int(_local_env_value("AEGIS_RAGAS_MAX_TOKENS", "700")),
+            expect_json=True,
+            runtime_state=state,
+        )
+        if isinstance(response, dict) and response.get("success"):
+            response.setdefault("provider", "LOCAL")
+            response.setdefault("model", _safe_dict(response.get("telemetry")).get("model", model))
+            return response
+        return _fallback_ragas_llm(
+            "LOCAL",
+            model,
+            str(_safe_dict(response).get("error") or _safe_dict(response).get("content") or "Local Qwen returned unsuccessful response"),
+            "RAGAS local LLM evaluation failed.",
+        )
+    except Exception as exc:
+        return _fallback_ragas_llm("LOCAL", model, f"LOCAL_QWEN_UNAVAILABLE: {exc}", "RAGAS local LLM evaluation failed.")
+
+
+def _invoke_groq_ragas_llm(prompt: str, state: Dict[str, Any]) -> Dict[str, Any]:
     groq_key = _local_env_value("GROQ_API_KEY")
     if not groq_key:
-        return {
-            "success": False,
-            "provider": "AEGIS_LLM_CONFIG",
-            "model": "RAGAS_LLM_REQUIRED",
-            "latency_ms": 0,
-            "parsed_output": {
-                "executive_summary": "RAGAS LLM evaluation is mandatory but GROQ_API_KEY is not configured.",
-                "quality_assessment": "LLM_CONFIG_MISSING",
-                "strengths": [],
-                "weaknesses": ["Mandatory RAGAS LLM provider key is missing."],
-                "recommended_actions": ["Set GROQ_API_KEY in environment or .env.local and rerun AEGIS."],
-                "confidence": 0,
-            },
-            "error": "GROQ_API_KEY_REQUIRED_FOR_MANDATORY_RAGAS",
-        }
+        return _fallback_ragas_llm("GROQ", "RAGAS_LLM_REQUIRED", "GROQ_API_KEY_REQUIRED_FOR_MANDATORY_RAGAS", "RAGAS Groq evaluation skipped because GROQ_API_KEY is not configured.")
     os.environ.setdefault("GROQ_API_KEY", groq_key)
     timeout_seconds = int(os.getenv("AEGIS_RAGAS_LLM_TIMEOUT_SECONDS", "20"))
     try:
         from groq import Groq
     except Exception as exc:
-        return {
-            "success": False,
-            "provider": "GROQ",
-            "model": "RAGAS_LLM_REQUIRED",
-            "latency_ms": 0,
-            "parsed_output": {
-                "executive_summary": "RAGAS LLM evaluation is mandatory but Groq package is unavailable.",
-                "quality_assessment": "LLM_RUNTIME_UNAVAILABLE",
-                "strengths": [],
-                "weaknesses": [str(exc)],
-                "recommended_actions": ["Install/configure the Groq runtime and retry RAGAS evaluation."],
-                "confidence": 0,
-            },
-            "error": f"GROQ_PACKAGE_UNAVAILABLE: {exc}",
-        }
+        return _fallback_ragas_llm("GROQ", "RAGAS_LLM_REQUIRED", f"GROQ_PACKAGE_UNAVAILABLE: {exc}", "RAGAS Groq evaluation failed because the Groq package is unavailable.")
 
     model = _local_env_value("AEGIS_GROQ_RAGAS_MODEL", _local_env_value("AEGIS_GROQ_JUDGE_MODEL", "llama-3.1-8b-instant"))
     start = datetime.now()
@@ -144,6 +171,31 @@ def _invoke_ragas_llm(prompt: str, state: Dict[str, Any]) -> Dict[str, Any]:
             },
             "error": str(exc),
         }
+
+
+def _invoke_ragas_llm(prompt: str, state: Dict[str, Any]) -> Dict[str, Any]:
+    attempts = []
+    for provider in _ragas_provider_order():
+        if provider == "DETERMINISTIC":
+            break
+        response = _invoke_groq_ragas_llm(prompt, state) if provider == "GROQ" else _invoke_local_ragas_llm(prompt, state)
+        if isinstance(response, dict) and response.get("success"):
+            response["provider_attempts"] = attempts
+            return response
+        attempts.append({
+            "provider": provider,
+            "status": "FAILED",
+            "error": str(_safe_dict(response).get("error") or "provider returned unsuccessful response")[:500],
+        })
+    result = _fallback_ragas_llm(
+        "DETERMINISTIC",
+        "AEGIS_DETERMINISTIC_RAGAS_FALLBACK",
+        "All configured RAGAS LLM providers failed.",
+        "RAGAS LLM providers failed; deterministic RAGAS scores were used for continuity.",
+    )
+    result["provider_attempts"] = attempts
+    result["deterministic_fallback_used"] = True
+    return result
 
 
 def generate_ragas_scores(runtime_state: Dict[str, Any]) -> Dict[str, Any]:

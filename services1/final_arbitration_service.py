@@ -101,7 +101,17 @@ def _guardrail_action(packet: Dict[str, Any]) -> str | None:
     return None
 
 
-def _fallback_decision(packet: Dict[str, Any], error: str) -> Dict[str, Any]:
+def _provider_order() -> List[str]:
+    raw = _local_env_value("AEGIS_FINAL_ARBITRATION_PROVIDER_ORDER", _local_env_value("AEGIS_LLM_PROVIDER_ORDER", "LOCAL,GROQ,DETERMINISTIC"))
+    order: List[str] = []
+    for item in [part.strip().upper() for part in raw.split(",") if part.strip()]:
+        normalized = "LOCAL" if item in {"QWEN", "QWEN_LOCAL", "LOCAL_QWEN"} else item
+        if normalized in {"GROQ", "LOCAL", "DETERMINISTIC"} and normalized not in order:
+            order.append(normalized)
+    return order or ["LOCAL", "GROQ", "DETERMINISTIC"]
+
+
+def _fallback_decision(packet: Dict[str, Any], error: str, attempts: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
     action = _guardrail_action(packet) or "HITL"
     return {
         "decision_id": f"AEGIS-FINAL-{datetime.now().strftime('%Y%m%d%H%M%S')}",
@@ -111,6 +121,8 @@ def _fallback_decision(packet: Dict[str, Any], error: str) -> Dict[str, Any]:
         "llm_used": False,
         "llm_provider": "UNAVAILABLE",
         "llm_model": "UNAVAILABLE",
+        "provider_attempts": attempts or [],
+        "fallback_used": True,
         "deterministic_guardrail_action": _guardrail_action(packet),
         "rationale": f"Final arbitration LLM could not run: {error}",
         "required_action": "Route to HITL." if action == "HITL" else "Reject response." if action == "REJECT" else "Return to onboarded app for retry.",
@@ -121,30 +133,50 @@ def _fallback_decision(packet: Dict[str, Any], error: str) -> Dict[str, Any]:
     }
 
 
-def run_final_arbitration(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
-    """Use an LLM to choose ACCEPT, REJECT, RETRY, or HITL for the final action."""
-    state = runtime_state if isinstance(runtime_state, dict) else {}
-    packet = _control_packet(state)
-    groq_key = _local_env_value("GROQ_API_KEY")
-    if not groq_key:
-        result = _fallback_decision(packet, "GROQ_API_KEY_REQUIRED_FOR_FINAL_ARBITRATION")
-        state["final_arbitration"] = result
-        return result
-    try:
-        from groq import Groq
-    except Exception as exc:
-        result = _fallback_decision(packet, f"GROQ_PACKAGE_UNAVAILABLE: {exc}")
-        state["final_arbitration"] = result
-        return result
-
-    model = _local_env_value("AEGIS_GROQ_FINAL_ARBITRATION_MODEL", _local_env_value("AEGIS_GROQ_JUDGE_MODEL", "llama-3.1-8b-instant"))
-    prompt = (
+def _prompt(packet: Dict[str, Any]) -> str:
+    return (
         "You are the AEGIS Final Arbitration Judge. Decide the final action for an onboarded agentic app response.\n"
         "Allowed actions: ACCEPT, REJECT, RETRY, HITL.\n"
         "Non-bypassable guardrails: critical policy failure or unsafe query means REJECT; mandatory RAGAS failure means RETRY unless unsafe; HITL is required for unresolved review.\n"
         "Return ONLY JSON with fields: aegis_final_decision, rationale, required_action, retry_reason, hitl_required, confidence.\n\n"
         f"Control packet:\n{json.dumps(packet, default=str)[:12000]}"
     )
+
+
+def _result_from_parsed(parsed: Dict[str, Any], packet: Dict[str, Any], provider: str, model: str, guardrail: str | None) -> Dict[str, Any]:
+    action = str(parsed.get("aegis_final_decision") or "").upper()
+    if action not in VALID_ACTIONS:
+        action = guardrail or "HITL"
+    if guardrail in {"REJECT", "RETRY"} and action == "ACCEPT":
+        action = guardrail
+    return {
+        "decision_id": f"AEGIS-FINAL-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        "created_at": datetime.now().isoformat(),
+        "aegis_final_decision": action,
+        "decision_source": f"AEGIS_{provider}_FINAL_ARBITRATION",
+        "llm_used": True,
+        "llm_provider": provider,
+        "llm_model": model,
+        "fallback_used": False,
+        "deterministic_guardrail_action": guardrail,
+        "rationale": parsed.get("rationale") or f"{provider} arbitration completed.",
+        "required_action": parsed.get("required_action") or action,
+        "retry_reason": parsed.get("retry_reason"),
+        "hitl_required": bool(parsed.get("hitl_required") or action == "HITL"),
+        "confidence": parsed.get("confidence"),
+        "control_packet": packet,
+    }
+
+
+def _invoke_groq_arbitration(packet: Dict[str, Any], prompt: str) -> Dict[str, Any]:
+    groq_key = _local_env_value("GROQ_API_KEY")
+    model = _local_env_value("AEGIS_GROQ_FINAL_ARBITRATION_MODEL", _local_env_value("AEGIS_GROQ_JUDGE_MODEL", "llama-3.1-8b-instant"))
+    if not groq_key:
+        return {"success": False, "provider": "GROQ", "model": model, "error": "GROQ_API_KEY_REQUIRED_FOR_FINAL_ARBITRATION"}
+    try:
+        from groq import Groq
+    except Exception as exc:
+        return {"success": False, "provider": "GROQ", "model": model, "error": f"GROQ_PACKAGE_UNAVAILABLE: {exc}"}
     try:
         response = Groq(api_key=groq_key, timeout=int(os.getenv("AEGIS_FINAL_ARBITRATION_TIMEOUT_SECONDS", "20"))).chat.completions.create(
             model=model,
@@ -156,31 +188,60 @@ def run_final_arbitration(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
             max_tokens=700,
             response_format={"type": "json_object"},
         )
-        parsed = json.loads(response.choices[0].message.content or "{}")
-        action = str(parsed.get("aegis_final_decision") or "").upper()
-        if action not in VALID_ACTIONS:
-            action = _guardrail_action(packet) or "HITL"
-        guardrail = _guardrail_action(packet)
-        if guardrail in {"REJECT", "RETRY"} and action == "ACCEPT":
-            action = guardrail
-        result = {
-            "decision_id": f"AEGIS-FINAL-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-            "created_at": datetime.now().isoformat(),
-            "aegis_final_decision": action,
-            "decision_source": "AEGIS_LLM_FINAL_ARBITRATION",
-            "llm_used": True,
-            "llm_provider": "GROQ",
-            "llm_model": model,
-            "deterministic_guardrail_action": guardrail,
-            "rationale": parsed.get("rationale") or "LLM arbitration completed.",
-            "required_action": parsed.get("required_action") or action,
-            "retry_reason": parsed.get("retry_reason"),
-            "hitl_required": bool(parsed.get("hitl_required") or action == "HITL"),
-            "confidence": parsed.get("confidence"),
-            "control_packet": packet,
-        }
+        return {"success": True, "provider": "GROQ", "model": model, "parsed_output": json.loads(response.choices[0].message.content or "{}")}
     except Exception as exc:
-        result = _fallback_decision(packet, str(exc))
+        return {"success": False, "provider": "GROQ", "model": model, "error": str(exc)}
+
+
+def _invoke_local_arbitration(packet: Dict[str, Any], prompt: str, state: Dict[str, Any]) -> Dict[str, Any]:
+    model = _local_env_value("AEGIS_LOCAL_FINAL_ARBITRATION_MODEL", "QWEN_LOCAL")
+    try:
+        from services1.llm_runtime import invoke_reasoning_agent  # type: ignore
+        response = invoke_reasoning_agent(
+            agent_name="AEGIS Final Arbitration Judge",
+            system_prompt="AEGIS Final Arbitration Judge. Return only valid JSON.",
+            user_prompt=prompt,
+            temperature=0.0,
+            max_tokens=int(_local_env_value("AEGIS_FINAL_ARBITRATION_MAX_TOKENS", "700")),
+            expect_json=True,
+            runtime_state=state,
+        )
+        parsed = _safe_dict(_safe_dict(response).get("parsed_output") or _safe_dict(_safe_dict(response).get("json_status")).get("data"))
+        if isinstance(response, dict) and response.get("success") and parsed:
+            return {
+                "success": True,
+                "provider": "LOCAL",
+                "model": _safe_dict(response.get("telemetry")).get("model", model),
+                "parsed_output": parsed,
+            }
+        return {"success": False, "provider": "LOCAL", "model": model, "error": str(_safe_dict(response).get("error") or _safe_dict(response).get("content") or "Local Qwen returned unsuccessful response")}
+    except Exception as exc:
+        return {"success": False, "provider": "LOCAL", "model": model, "error": f"LOCAL_QWEN_UNAVAILABLE: {exc}"}
+
+
+def run_final_arbitration(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
+    """Use an LLM to choose ACCEPT, REJECT, RETRY, or HITL for the final action."""
+    state = runtime_state if isinstance(runtime_state, dict) else {}
+    packet = _control_packet(state)
+    prompt = _prompt(packet)
+    guardrail = _guardrail_action(packet)
+    attempts: List[Dict[str, Any]] = []
+    result = None
+    for provider in _provider_order():
+        if provider == "DETERMINISTIC":
+            break
+        response = _invoke_groq_arbitration(packet, prompt) if provider == "GROQ" else _invoke_local_arbitration(packet, prompt, state)
+        if isinstance(response, dict) and response.get("success"):
+            result = _result_from_parsed(_safe_dict(response.get("parsed_output")), packet, provider, str(response.get("model") or "LLM_MODEL"), guardrail)
+            result["provider_attempts"] = attempts
+            break
+        attempts.append({
+            "provider": provider,
+            "status": "FAILED",
+            "error": str(_safe_dict(response).get("error") or "provider returned unsuccessful response")[:500],
+        })
+    if result is None:
+        result = _fallback_decision(packet, "All configured final arbitration LLM providers failed.", attempts)
     state["final_arbitration"] = result
     state["aegis_final_decision"] = result["aegis_final_decision"]
     return result

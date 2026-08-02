@@ -6988,7 +6988,7 @@ def render_llm_judge_assurance(result):
         {
             "eyebrow": "Provider Chain",
             "title": f"{final_provider}",
-            "detail": f"Priority is Groq online judge, then local Qwen, then deterministic fallback. Current engine: {final_engine}.",
+            "detail": f"Priority is local Qwen, then Groq online judge, then deterministic fallback. Current engine: {final_engine}.",
             "state": "pass",
         },
         {
@@ -7033,15 +7033,15 @@ def render_llm_judge_assurance(result):
     render_table("Judge Provider Chain", [
         {
             "Priority": 1,
-            "Provider": "Groq",
-            "When Used": "GROQ_API_KEY is available, SDK/network call succeeds, and judge mode requests LLM judging.",
-            "Purpose": "Fast online independent judge for executive demo and arbitration.",
+            "Provider": "Local Qwen",
+            "When Used": "Default independent path for office/offline execution.",
+            "Purpose": "Offline/local LLM judge and arbitration path.",
         },
         {
             "Priority": 2,
-            "Provider": "Local Qwen",
-            "When Used": "Groq is unavailable, blocked, or fails.",
-            "Purpose": "Offline resilience path using the local model runtime.",
+            "Provider": "Groq",
+            "When Used": "Local Qwen is unavailable or blocked, and GROQ_API_KEY is configured.",
+            "Purpose": "Online independent judge fallback.",
         },
         {
             "Priority": 3,
