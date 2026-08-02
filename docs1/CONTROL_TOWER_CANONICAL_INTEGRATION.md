@@ -68,6 +68,7 @@ measurements = measure_control_tower_objects(
 - `ragas_scores`: mandatory LLM-based RAGAS evaluation for faithfulness, answer relevancy, context precision, and context recall.
 - `owasp_ai`: OWASP/security verdict derived from judge and security signals.
 - `policy_as_code`: release gates for trust, confidence, evidence, OWASP, PII, latency, retry, and risk.
+- `final_arbitration`: mandatory LLM final decision packet with `ACCEPT`, `REJECT`, `RETRY`, or `HITL`.
 - `canonical_object_audit`: row-level canonical Control Tower objects for dashboards and audit reports.
 - `canonical_consistency_audit`: stale projection checks across runtime objects.
 - `runtime_event_contract`: normalized AEGIS runtime event contract for emitted agent events.
@@ -119,6 +120,20 @@ AEGIS checks for:
 
 Unsafe query findings are stored in `query_security`, copied into
 `security_analysis`, shown in the `OWASP AI` tab, and used by policy gates.
+
+## Mandatory Final Arbitration
+
+At the end of every runtime, AEGIS builds a control packet from deterministic
+controls, RAGAS, OWASP query validation, policy gates, lifecycle coverage, and
+LLM Judge verdicts. The Final Arbitration Judge then chooses one action:
+
+- `ACCEPT`: return/accept the onboarded app response.
+- `REJECT`: block the response.
+- `RETRY`: send the response back to the onboarded app for retry.
+- `HITL`: route to human review.
+
+Deterministic guardrails remain non-bypassable. Critical policy/security
+failures cannot be converted to `ACCEPT` by the LLM.
 
 ## AEGIS-Derived HITL Logic
 

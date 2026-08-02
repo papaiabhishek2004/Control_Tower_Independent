@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from services1.agentic_app_adapters import JSONL_RUNTIME_LOG_APP_ID, execute_onboarded_agentic_app
+from services1.final_arbitration_service import run_final_arbitration
 from services1.llm_judge_assurance_service import run_llm_judge_assurance
 from services1.onboarded_app_registry_service import app_record, register_app, registry_rows
 from services1.policy_as_code_service import evaluate_policy_as_code
@@ -98,6 +99,7 @@ def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:
         "rationale": security.get("rationale", "-"),
     }
     state["policy_as_code"] = evaluate_policy_as_code(state)
+    state["final_arbitration"] = run_final_arbitration(state)
     return state
 
 
@@ -171,10 +173,14 @@ def _registry_context(app_id: str) -> Dict[str, Any]:
 
 def _decision_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     display = _safe_dict(state.get("canonical_display"))
+    arbitration = _safe_dict(state.get("final_arbitration"))
     release = _safe_dict(_safe_dict(state.get("canonical_control_tower_measurements")).get("release_assessment"))
     health = _safe_dict(state.get("customer_health"))
     rows = [
+        ("AEGIS Final Decision", arbitration.get("aegis_final_decision"), "final_arbitration.aegis_final_decision"),
         ("Final Recommendation", state.get("final_recommendation") or display.get("final_recommendation") or display.get("recommendation"), "final_recommendation"),
+        ("Required Action", arbitration.get("required_action"), "final_arbitration.required_action"),
+        ("LLM Arbitration Used", "YES" if arbitration.get("llm_used") else "NO", "final_arbitration.llm_used"),
         ("Risk Level", state.get("risk_level") or display.get("risk_level"), "risk_level"),
         ("Control Status", state.get("control_status") or display.get("control_status"), "control_status"),
         ("HITL Required", "YES" if state.get("hitl_required") else "NO", "hitl_required"),
@@ -405,6 +411,22 @@ def _ragas_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _final_arbitration_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    arbitration = _safe_dict(state.get("final_arbitration"))
+    return [
+        {"Decision Field": "AEGIS Final Decision", "Value": arbitration.get("aegis_final_decision"), "Meaning": "Final action for onboarded app response"},
+        {"Decision Field": "Decision Source", "Value": arbitration.get("decision_source"), "Meaning": "LLM arbitration or mandatory fallback"},
+        {"Decision Field": "LLM Used", "Value": "YES" if arbitration.get("llm_used") else "NO", "Meaning": "Whether final action came from LLM call"},
+        {"Decision Field": "LLM Provider", "Value": arbitration.get("llm_provider"), "Meaning": "Final arbitration provider"},
+        {"Decision Field": "LLM Model", "Value": arbitration.get("llm_model"), "Meaning": "Final arbitration model"},
+        {"Decision Field": "Guardrail Action", "Value": arbitration.get("deterministic_guardrail_action"), "Meaning": "Non-bypassable deterministic guardrail"},
+        {"Decision Field": "Required Action", "Value": arbitration.get("required_action"), "Meaning": "What AEGIS sends back or routes next"},
+        {"Decision Field": "Retry Reason", "Value": arbitration.get("retry_reason"), "Meaning": "Reason when response is returned for retry"},
+        {"Decision Field": "HITL Required", "Value": "YES" if arbitration.get("hitl_required") else "NO", "Meaning": "Human review routing"},
+        {"Decision Field": "Rationale", "Value": arbitration.get("rationale"), "Meaning": "Evidence-backed arbitration rationale"},
+    ]
+
+
 @st.cache_resource
 def _runtime_ui():
     return load_runtime_intelligence_ui()
@@ -459,10 +481,11 @@ if not isinstance(state, dict) or not state:
     st.stop()
 
 display = _safe_dict(state.get("canonical_display"))
+arbitration = _safe_dict(state.get("final_arbitration"))
 release = _safe_dict(_safe_dict(state.get("canonical_control_tower_measurements")).get("release_assessment"))
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Final Recommendation", state.get("final_recommendation") or display.get("recommendation", "-"))
+c1.metric("AEGIS Final Decision", arbitration.get("aegis_final_decision", "-"))
 c2.metric("Risk", state.get("risk_level") or display.get("risk_level", "-"))
 c3.metric("HITL", "YES" if state.get("hitl_required") else "NO")
 c4.metric("Release Route", release.get("release_route", "-"))
@@ -481,6 +504,7 @@ tabs = st.tabs(["Decision", "Lifecycle", "RAGAS", "LLM Judge", "OWASP AI", "Regi
 
 with tabs[0]:
     _render_table("AEGIS Decision Objects", _decision_rows(state))
+    _render_table("LLM Final Arbitration", _final_arbitration_rows(state))
     reasons = _safe_list(state.get("hitl_reasons"))
     if reasons:
         _render_table("HITL Reasons", [{"Reason": str(reason)} for reason in reasons])
