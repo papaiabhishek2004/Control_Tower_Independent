@@ -449,12 +449,10 @@ def governance_release_assessment(runtime_state: Dict[str, Any]) -> Dict[str, An
 def canonical_display_payload(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
     result = safe_dict(runtime_state)
     existing = result.get("canonical_display")
-    if isinstance(existing, dict) and existing:
-        return dict(existing)
     quality = canonical_quality_scores(result)
     recommendation, risk_level = runtime_recommendation_and_risk(result)
     token = safe_dict(result.get("token_metrics") or safe_get(result.get("runtime_telemetry"), "token_metrics"))
-    return {
+    payload = {
         "trust_score": quality["trust_score"],
         "confidence": quality["confidence"],
         "risk_level": risk_level,
@@ -467,6 +465,14 @@ def canonical_display_payload(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
         "estimated_cost_usd": round(numeric_score(token.get("estimated_cost_usd", result.get("estimated_cost_usd", 0)), 0), 6),
         "cost_source": "token_metrics.estimated_cost_usd",
     }
+    if isinstance(existing, dict) and existing:
+        payload.update({key: value for key, value in existing.items() if not is_unknown_value(value)})
+        payload["recommendation"] = payload.get("recommendation") or payload["final_recommendation"]
+        payload["final_recommendation"] = payload.get("final_recommendation") or payload["recommendation"]
+        payload["risk_level"] = payload.get("risk_level") or risk_level
+        payload["control_status"] = payload.get("control_status") or derive_control_status(result)
+        payload["error_code"] = payload.get("error_code") or normalize_error_code(result)
+    return payload
 
 
 def agent_counts(runtime_state: Dict[str, Any]) -> Dict[str, Any]:
@@ -511,10 +517,9 @@ def canonical_consistency_audit_rows(runtime_state: Dict[str, Any]) -> List[Dict
     release = governance_release_assessment(result)
     expected = {
         "recommendation": display["recommendation"],
-        "final_recommendation": display["recommendation"],
         "decision": display["recommendation"],
         "risk_level": display["risk_level"],
-        "final_recommendation": display["final_recommendation"],
+        "final_recommendation": display.get("final_recommendation", display["recommendation"]),
         "control_status": display["control_status"],
         "error_code": display["error_code"],
         "compliance_status": compliance_status,
