@@ -26,6 +26,7 @@ from services1.agentic_app_adapters import JSONL_RUNTIME_LOG_APP_ID, execute_onb
 from services1.llm_judge_assurance_service import run_llm_judge_assurance
 from services1.onboarded_app_registry_service import app_record, register_app, registry_rows
 from services1.policy_as_code_service import evaluate_policy_as_code
+from services1.ragas_service import evaluate_rag_quality
 from services1.runtime_intelligence_ui_loader import load_runtime_intelligence_ui
 
 
@@ -76,6 +77,7 @@ def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
 
 
 def _apply_control_tower_assurance(state: Dict[str, Any]) -> Dict[str, Any]:
+    state["ragas_scores"] = evaluate_rag_quality(state)
     assurance = run_llm_judge_assurance(state, use_llm=True)
     state["llm_judge_assurance"] = assurance
     security = next((row for row in assurance.get("judge_verdicts", []) if row.get("judge_id") == "security_owasp"), {})
@@ -356,6 +358,18 @@ def _policy_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
+def _ragas_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    ragas = _safe_dict(state.get("ragas_scores") or state.get("ragas"))
+    return [
+        {"RAGAS Metric": "Overall Score", "Value": ragas.get("overall_score"), "Status": ragas.get("status"), "Source": "AEGIS RAGAS LLM evaluation"},
+        {"RAGAS Metric": "Faithfulness", "Value": ragas.get("faithfulness"), "Status": ragas.get("status"), "Source": "Evidence + trust"},
+        {"RAGAS Metric": "Answer Relevancy", "Value": ragas.get("answer_relevancy"), "Status": ragas.get("status"), "Source": "Validated/retrieved chunks"},
+        {"RAGAS Metric": "Context Precision", "Value": ragas.get("context_precision"), "Status": ragas.get("status"), "Source": "Evidence pack"},
+        {"RAGAS Metric": "Context Recall", "Value": ragas.get("context_recall"), "Status": ragas.get("status"), "Source": "Validated/retrieved chunks"},
+        {"RAGAS Metric": "LLM Confidence", "Value": ragas.get("confidence"), "Status": "COMPLETED" if state.get("ragas_success") else "FAILED", "Source": _safe_dict(ragas.get("ragas_llm")).get("provider", "LLM runtime")},
+    ]
+
+
 @st.cache_resource
 def _runtime_ui():
     return load_runtime_intelligence_ui()
@@ -428,7 +442,7 @@ c3.caption("AEGIS derived")
 c4.metric("Error Code", state.get("error_code") or display.get("error_code", "-"))
 c4.caption("AEGIS normalized")
 
-tabs = st.tabs(["Decision", "Lifecycle", "LLM Judge", "OWASP AI", "Registry", "Personas", "Missing Required Variables", "Consistency"])
+tabs = st.tabs(["Decision", "Lifecycle", "RAGAS", "LLM Judge", "OWASP AI", "Registry", "Personas", "Missing Required Variables", "Consistency"])
 
 with tabs[0]:
     _render_table("AEGIS Decision Objects", _decision_rows(state))
@@ -446,6 +460,15 @@ with tabs[1]:
     _render_table("Runtime Lifecycle Segregation", lifecycle)
 
 with tabs[2]:
+    ragas = _safe_dict(state.get("ragas_scores"))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("RAGAS Overall", _metric_value(ragas.get("overall_score")))
+    c2.metric("RAGAS Status", ragas.get("status", "-"))
+    c3.metric("RAGAS LLM", "COMPLETED" if state.get("ragas_success") else "FAILED")
+    st.caption(ragas.get("executive_summary", "-"))
+    _render_table("RAGAS Quality Evaluation", _ragas_rows(state))
+
+with tabs[3]:
     assurance = _safe_dict(state.get("llm_judge_assurance"))
     c1, c2, c3 = st.columns(3)
     c1.metric("Final Judge Verdict", assurance.get("final_verdict", "-"))
@@ -454,11 +477,11 @@ with tabs[2]:
     st.caption(assurance.get("final_rationale", "-"))
     _render_table("LLM Judge Committee", _llm_judge_rows(state))
 
-with tabs[3]:
+with tabs[4]:
     _render_table("OWASP AI Controls", _owasp_rows(state))
     _render_table("Policy-as-Code Security Gates", _policy_rows(state))
 
-with tabs[4]:
+with tabs[5]:
     registry = _registry_context(str(state.get("app_id") or app_id))
     rows = registry_rows()
     if registry:
@@ -467,13 +490,13 @@ with tabs[4]:
         st.warning("This runtime app_id is not registered in AEGIS registry.")
     _render_table("Onboarded Agentic Apps Registry", rows)
 
-with tabs[5]:
+with tabs[6]:
     _runtime_ui().render_persona_operating_model(state)
 
-with tabs[6]:
+with tabs[7]:
     _render_table("Required Event Envelope", _missing_rows(state))
 
-with tabs[7]:
+with tabs[8]:
     rows = _safe_list(state.get("canonical_consistency_audit"))
     mismatch_rows = [row for row in rows if isinstance(row, dict) and row.get("Status") == "MISMATCH"]
     if mismatch_rows:

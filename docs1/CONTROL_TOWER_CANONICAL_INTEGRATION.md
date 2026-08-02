@@ -65,6 +65,7 @@ measurements = measure_control_tower_objects(
 - `quality`: trust, confidence, grounding, coverage, and hallucination values.
 - `release_assessment`: release route, HITL requirement, governance status, and reasons.
 - `llm_judge_assurance`: LLM Judge committee verdicts for OWASP, evidence, grounding, governance, business risk, and final arbitration.
+- `ragas_scores`: mandatory LLM-based RAGAS evaluation for faithfulness, answer relevancy, context precision, and context recall.
 - `owasp_ai`: OWASP/security verdict derived from judge and security signals.
 - `policy_as_code`: release gates for trust, confidence, evidence, OWASP, PII, latency, retry, and risk.
 - `canonical_object_audit`: row-level canonical Control Tower objects for dashboards and audit reports.
@@ -88,6 +89,20 @@ The LLM Judge committee includes:
 - Governance Judge
 - Business Risk Judge
 - Final Arbitration Judge
+
+## Mandatory RAGAS Evaluation
+
+AEGIS also runs mandatory LLM-based RAGAS evaluation for every onboarded app
+runtime. It uses the emitted evidence and retrieval context to score:
+
+- Faithfulness
+- Answer Relevancy
+- Context Precision
+- Context Recall
+
+RAGAS uses Groq directly through `GROQ_API_KEY` or `.env.local`. It does not use
+local model fallback in the independent Control Tower path. If the key/provider
+is unavailable, AEGIS records a failed mandatory RAGAS control result.
 
 ## AEGIS-Derived HITL Logic
 
