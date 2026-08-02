@@ -230,6 +230,12 @@ The Persona Decision Tower has a `Registry` tab and a sidebar
 `Register / Update App` action. Register each app once, then have that app emit
 JSONL files into its registered `log_folder`.
 
+Sample full canonical event:
+
+```text
+docs1/sample_canonical_runtime_event.json
+```
+
 AEGIS can pick up that file through the JSONL adapter:
 
 ```python

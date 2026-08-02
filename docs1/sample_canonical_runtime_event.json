@@ -1,0 +1,61 @@
+{
+  "runtime_id": "RUN-001",
+  "app_id": "CUSTOMER_360_AGENT",
+  "agent_id": "retriever_01",
+  "agent_name": "Retriever Agent",
+  "event_type": "AGENT_COMPLETED",
+  "status": "COMPLETED",
+  "timestamp": "2026-08-02T18:55:00Z",
+  "agent_type": "RETRIEVAL_AGENT",
+  "phase": "DURING_RUNTIME",
+  "lifecycle_phase": "DURING_RUNTIME",
+  "execution_order": 2,
+  "stage_id": "evidence_runtime",
+  "started_at": "2026-08-02T18:54:58Z",
+  "completed_at": "2026-08-02T18:55:00Z",
+  "duration_ms": 2000,
+  "retry_count": 0,
+  "max_retries": 2,
+  "retry_reason": "",
+  "previous_agents": [
+    "planner_01"
+  ],
+  "next_agents": [
+    "decision_01"
+  ],
+  "provider": "OpenAI",
+  "model": "gpt-4.1",
+  "model_version": "2026-xx",
+  "prompt_hash": "sha256:ab12cd34",
+  "prompt_template_id": "customer-risk-review-v1",
+  "input_tokens": 147,
+  "output_tokens": 440,
+  "total_tokens": 587,
+  "retrieval_method": "Hybrid BM25 + Vector",
+  "retrieved_chunks": [
+    {
+      "chunk_id": "TX001",
+      "rank": 1,
+      "score": 0.87
+    }
+  ],
+  "reranked_chunks": [
+    {
+      "chunk_id": "TX001",
+      "rank": 1,
+      "score": 0.92
+    }
+  ],
+  "control_id": "OWASP-LLM02",
+  "control_status": "PASS",
+  "findings": [
+    "No prompt injection detected"
+  ],
+  "recommendation": "APPROVE",
+  "risk_level": "LOW",
+  "confidence": 86,
+  "rationale": "Evidence-backed response with policy-approved route.",
+  "error_code": "NONE",
+  "error_message": "",
+  "fallback_used": false
+}
