@@ -70,10 +70,49 @@ def _emitted_fields(state: Dict[str, Any]) -> set:
     return {str(item).casefold() for item in _safe_list(state.get("emitted_canonical_fields"))}
 
 
+AEGIS_AUTHORED_PREFIXES = (
+    "final_arbitration.",
+    "final_decision_consistency.",
+    "canonical_control_tower_measurements.",
+    "policy_as_code.",
+    "ragas_scores.",
+    "llm_judge_assurance.",
+    "owasp_ai.",
+    "query_security.",
+    "security_analysis.",
+    "customer_health.",
+)
+
+AEGIS_AUTHORED_FIELDS = {
+    "aegis_final_decision",
+    "control_status",
+    "effective_release_route",
+    "hitl_required",
+    "human_review_required",
+    "hitl_reasons",
+    "error_code",
+    "final_recommendation",
+    "agentic_app_adapter",
+    "canonical_consistency_audit",
+    "canonical_runtime_event_contract",
+}
+
+
+def _is_aegis_authored(source: str) -> bool:
+    clean = str(source or "").strip().casefold()
+    if not clean:
+        return False
+    if "," in clean:
+        return True
+    return clean in AEGIS_AUTHORED_FIELDS or any(clean.startswith(prefix) for prefix in AEGIS_AUTHORED_PREFIXES)
+
+
 def _was_emitted(state: Dict[str, Any], source: str) -> bool:
+    if _is_aegis_authored(source):
+        return False
     emitted = _emitted_fields(state)
-    parts = [part.casefold() for part in source.split(".")]
-    return source.casefold() in emitted or any(part in emitted for part in parts)
+    clean = str(source or "").strip().casefold()
+    return clean in emitted
 
 
 def _render_table(title: str, rows: List[Dict[str, Any]]) -> None:
@@ -289,14 +328,15 @@ def _source_label(state: Dict[str, Any], field: str) -> str:
 def _variable_row(state: Dict[str, Any], label_col: str, label: str, value: Any, source: str) -> Dict[str, Any]:
     emitted = _was_emitted(state, source)
     has_value = value not in (None, "", "-", [], {})
+    aegis_authored = _is_aegis_authored(source)
     return {
         label_col: label,
         "Variable Name": source,
         "Value": _metric_value(value),
         "Emitted by Onboarded App": "YES" if emitted else "NO",
-        "AEGIS System Calculated": "NO" if emitted else "YES" if has_value else "NO",
-        "Status": "APP EMITTED" if emitted else "AEGIS CALCULATED" if has_value else "MISSING",
-        "Guidance": "Received from onboarded app." if emitted else "Not emitted by Onboarded App; AEGIS calculated it." if has_value else f"Required variable not emitted from Onboarded App: {source}",
+        "AEGIS System Calculated": "YES" if aegis_authored or (has_value and not emitted) else "NO",
+        "Status": "AEGIS CALCULATED" if aegis_authored and has_value else "APP EMITTED" if emitted else "AEGIS CALCULATED" if has_value else "MISSING",
+        "Guidance": "AEGIS-derived control value." if aegis_authored and has_value else "Received from onboarded app." if emitted else "Not emitted by Onboarded App; AEGIS calculated it." if has_value else f"Required variable not emitted from Onboarded App: {source}",
     }
 
 
@@ -349,6 +389,56 @@ def _persona_metric(metric: str, value: Any, meaning: str, source: str) -> Dict[
         "Why It Matters": meaning,
         "Source Variable": source,
     }
+
+
+def _persona_value_audit_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    final_decision = str(state.get("aegis_final_decision") or _safe_dict(state.get("final_arbitration")).get("aegis_final_decision") or "").upper()
+    route = str(state.get("effective_release_route") or "").upper()
+    control_status = str(state.get("control_status") or "").upper()
+    for persona, metrics in _persona_rows(state).items():
+        for row in metrics:
+            source = str(row.get("Source Variable") or "")
+            value = row.get("Live Value")
+            emitted = _was_emitted(state, source)
+            issue = "PASS"
+            guidance = "Value source is clear."
+            if value in (None, "", "-"):
+                issue = "MISSING"
+                guidance = f"Required persona value is not available from source: {source}"
+            elif _is_aegis_authored(source) and emitted:
+                issue = "SOURCE_ERROR"
+                guidance = "AEGIS-authored value was incorrectly marked as app-emitted."
+            elif "Release route" in str(row.get("Metric")) and final_decision == "REJECT" and "RELEASE" in str(value).upper():
+                issue = "CONFLICT"
+                guidance = "Rejected decisions must not show RELEASE route."
+            elif "Control status" in str(row.get("Metric")) and final_decision == "REJECT" and control_status != "BLOCKED":
+                issue = "CONFLICT"
+                guidance = "Rejected decisions must have BLOCKED control status."
+            elif "HITL required" in str(row.get("Metric")) and final_decision == "HITL" and str(value).upper() != "YES":
+                issue = "CONFLICT"
+                guidance = "HITL final decision must show HITL required."
+            rows.append({
+                "Persona": persona,
+                "Metric": row.get("Metric"),
+                "Displayed Value": value,
+                "Source Variable": source,
+                "App Emitted": "YES" if emitted else "NO",
+                "AEGIS Calculated": "YES" if _is_aegis_authored(source) or (value not in (None, "", "-") and not emitted) else "NO",
+                "Audit Status": issue,
+                "Guidance": guidance,
+            })
+    rows.append({
+        "Persona": "Decision Authority",
+        "Metric": "Final route consistency",
+        "Displayed Value": f"{final_decision} -> {route or '-'} / {control_status or '-'}",
+        "Source Variable": "final_arbitration + final_decision_consistency",
+        "App Emitted": "NO",
+        "AEGIS Calculated": "YES",
+        "Audit Status": "PASS" if _safe_dict(state.get("final_decision_consistency")).get("status") == "PASS" else "REVIEW",
+        "Guidance": "Final arbitration is the authority for route and control status.",
+    })
+    return rows
 
 
 def _missing_rows(state: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -715,7 +805,11 @@ tabs = st.tabs(["Decision", "Lifecycle", "RAGAS", "LLM Judge", "OWASP AI", "Regi
 with tabs[0]:
     consistency = _safe_dict(state.get("final_decision_consistency"))
     if consistency.get("status") == "PASS":
-        st.success(f"Decision authority aligned: {consistency.get('aegis_final_decision')} -> {consistency.get('effective_release_route')}.")
+        message = f"Decision authority aligned: {consistency.get('aegis_final_decision')} -> {consistency.get('effective_release_route')}."
+        if consistency.get("aegis_final_decision") == "ACCEPT":
+            st.success(message)
+        else:
+            st.warning(message)
     else:
         st.warning("Decision authority alignment is unavailable for this runtime.")
     _render_table("AEGIS Decision Objects", _decision_rows(state))
@@ -775,6 +869,13 @@ with tabs[6]:
     _render_policy_editor()
 
 with tabs[7]:
+    audit_rows = _persona_value_audit_rows(state)
+    issues = [row for row in audit_rows if row.get("Audit Status") not in {"PASS"}]
+    if issues:
+        st.warning(f"{len(issues)} persona value audit issue(s) found.")
+    else:
+        st.success("All Persona Decision Tower values passed source and consistency audit.")
+    _render_table("Persona Value Audit", audit_rows)
     _runtime_ui().render_persona_operating_model(state)
 
 with tabs[8]:
